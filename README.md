@@ -47,6 +47,9 @@ Key dependencies include:
    venv\Scripts\activate      # Windows
    ```
 3. Install dependencies:
+   ```
+   pip install -r Requirements.txt
+   ```
 
 4. Configure your `.env` file:
    ```
