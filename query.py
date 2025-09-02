@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Streamlit Q&A over a Pinecone index.
 
@@ -27,13 +29,28 @@ from typing import Any, Dict, List, Optional
 import os
 
 import streamlit as st
-from dotenv import load_dotenv
 from pinecone import Pinecone
 from openai import OpenAI
 
 # ---------- App & env ----------
-st.set_page_config(page_title="Apples & BMS", page_icon="🔎", layout="wide")
-load_dotenv()
+st.set_page_config(page_title="Pinecone Q&A", page_icon="🔎", layout="wide")
+
+# Try to load a local .env if python-dotenv is available; otherwise ignore
+try:
+    from dotenv import load_dotenv  # optional in Streamlit Cloud
+    load_dotenv()
+except Exception:
+    pass
+
+# Streamlit Cloud secrets fallback (so the app works without python-dotenv)
+try:
+    if "PINECONE_API_KEY" not in os.environ and "PINECONE_API_KEY" in st.secrets:
+        os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+    if "OPENAI_API_KEY" not in os.environ and "OPENAI_API_KEY" in st.secrets:
+        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    # st.secrets may not exist locally; ignore
+    pass
 
 SPECIAL_INFERENCE_INDEX = "llama-text-embed-v2-index"
 SPECIAL_INFERENCE_MODEL = "llama-text-embed-v2"
@@ -226,10 +243,10 @@ def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
 
 
 def build_context(snippets: List[str], max_chars: int = 6000) -> str:
-    blob = "\n\n".join(s.strip() for s in snippets if s.strip())
-    if len(blob) <= max_chars:
-        return blob
-    return blob[:max_chars]
+    blob = (
+        "\n\n".join(s.strip() for s in snippets if s.strip())
+    )
+    return blob if len(blob) <= max_chars else blob[:max_chars]
 
 
 def answer_question(question: str, context: str) -> str:
@@ -254,7 +271,7 @@ If the answer cannot be found in the context, say you don't know.
 
 
 # ---------- UI ----------
-st.title("🔎 Apple(s) & BMS")
+st.title("🔎 Pinecone Q&A")
 
 with st.sidebar:
     st.header("Connection")
@@ -325,8 +342,7 @@ with st.sidebar:
         st.caption(
             "Server-side inference runs inside Pinecone; vector mode embeds locally.")
 
-query = st.text_input(
-    "Your question", placeholder="e.g., Ask me about apple(s) or BMS")
+query = st.text_input("Your question", placeholder="e.g., what is an apple?")
 col_search, col_clear = st.columns([1, 1])
 with col_search:
     go = st.button("Search")
@@ -358,7 +374,6 @@ if go and index_name and query.strip():
                 results = vector_query(
                     idx, namespace, query, top_k, EMBED_MODEL or DEFAULT_EMBED_MODEL)
                 mode_used = "client-side (vector)"
-
             matches = normalize_matches(results)
         except Exception as e:
             st.error(f"Search failed: {e}")
