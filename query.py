@@ -342,7 +342,7 @@ with st.sidebar:
         st.caption(
             "Server-side inference runs inside Pinecone; vector mode embeds locally.")
 
-query = st.text_input("Your question", placeholder="e.g., what is an apple?")
+query = st.text_input("Your question", placeholder="Ask me about apple(s) or BMS")
 col_search, col_clear = st.columns([1, 1])
 with col_search:
     go = st.button("Search")
