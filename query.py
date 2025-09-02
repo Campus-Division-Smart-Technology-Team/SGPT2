@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Streamlit Q&A over a Pinecone index.
+Streamlit Q&A over a Pinecone index with University of Bristol branding and intro.
 
 Behavior:
 - When the selected index is exactly "llama-text-embed-v2-index", use Pinecone
@@ -33,7 +33,12 @@ from pinecone import Pinecone
 from openai import OpenAI
 
 # ---------- App & env ----------
-st.set_page_config(page_title="Apples & BMS", page_icon="🔎", layout="wide")
+# Page config (from user's branding snippet)
+st.set_page_config(
+    page_title="University of Bristol | Streamlit App",
+    page_icon="https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
+    layout="wide",
+)
 
 # Try to load a local .env if python-dotenv is available; otherwise ignore
 try:
@@ -55,27 +60,20 @@ except Exception:
 SPECIAL_INFERENCE_INDEX = "llama-text-embed-v2-index"
 SPECIAL_INFERENCE_MODEL = "llama-text-embed-v2"
 
-DEFAULT_EMBED_MODEL = os.getenv(
-    "DEFAULT_EMBED_MODEL", "text-embedding-3-small")
+DEFAULT_EMBED_MODEL = os.getenv("DEFAULT_EMBED_MODEL", "text-embedding-3-small")
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 
 # ---------- Clients ----------
-
-
 def get_oai() -> OpenAI:
     return OpenAI()
 
-
 def get_pc() -> Pinecone:
     return Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
-
 
 pc = get_pc()
 oai = get_oai()
 
 # ---------- Pinecone helpers ----------
-
-
 def list_index_names() -> List[str]:
     try:
         idxs = pc.list_indexes()
@@ -87,10 +85,8 @@ def list_index_names() -> List[str]:
         return [i["name"] for i in idxs["indexes"]]
     return list(idxs) if isinstance(idxs, (list, tuple)) else []
 
-
 def open_index(name: str):
     return pc.Index(name)
-
 
 def list_namespaces_for_index(idx) -> List[str]:
     """Return available namespaces for an index ('' means default namespace).
@@ -112,34 +108,14 @@ def list_namespaces_for_index(idx) -> List[str]:
         # If stats not available, just expose default namespace
         return [""]
 
-
-def list_index_names() -> List[str]:
-    try:
-        idxs = pc.list_indexes()
-    except Exception:
-        return []
-    if hasattr(idxs, "names"):
-        return list(idxs.names())
-    if isinstance(idxs, dict) and "indexes" in idxs:
-        return [i["name"] for i in idxs["indexes"]]
-    return list(idxs) if isinstance(idxs, (list, tuple)) else []
-
-
-def open_index(name: str):
-    return pc.Index(name)
-
 # ---------- Search utilities ----------
-
-
 def embed_texts(texts: List[str], model: str) -> List[List[float]]:
     res = oai.embeddings.create(model=model, input=texts)
     return [d.embedding for d in res.data]
 
-
 def vector_query(idx, namespace: str, query: str, k: int, embed_model: str) -> Dict[str, Any]:
     vec = embed_texts([query], embed_model)[0]
     return idx.query(vector=vec, top_k=k, namespace=namespace or "", include_metadata=True)
-
 
 def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str] = None):
     """
@@ -175,19 +151,15 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
             parameters={"input_type": "query", "truncate": "END"}
         )
         first = embs.data[0]
-        vec = first.get("values") if isinstance(
-            first, dict) else getattr(first, "values", None)
+        vec = first.get("values") if isinstance(first, dict) else getattr(first, "values", None)
         if vec is None:
-            vec = first.get("embedding") if isinstance(
-                first, dict) else getattr(first, "embedding", None)
+            vec = first.get("embedding") if isinstance(first, dict) else getattr(first, "embedding", None)
         if vec is None:
-            raise RuntimeError(
-                "Unexpected embeddings response shape; no vector values found")
+            raise RuntimeError("Unexpected embeddings response shape; no vector values found")
     except Exception as e:
         raise RuntimeError(f"Server-side embedding failed: {e}")
 
     return idx.query(vector=vec, top_k=k, namespace=ns or "", include_metadata=True)
-
 
 def _as_dict(obj: Any) -> Dict[str, Any]:
     to_dict = getattr(obj, "to_dict", None)
@@ -197,7 +169,6 @@ def _as_dict(obj: Any) -> Dict[str, Any]:
         except Exception:
             pass
     return obj if isinstance(obj, dict) else {}
-
 
 def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
     """ Normalise Pinecone results from either `matches` or `result.hits` shapes."""
@@ -220,14 +191,12 @@ def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
         return out
 
     # Inference search sometimes returns {"result": {"hits": [...]}}
-    hits = (data.get("result") or {}).get(
-        "hits") if isinstance(data, dict) else []
+    hits = (data.get("result") or {}).get("hits") if isinstance(data, dict) else []
     if isinstance(hits, list) and hits:
         out: List[Dict[str, Any]] = []
         for h in hits:
             fields = h.get("fields") or h.get("metadata") or {}
-            text_val = fields.get("text") or fields.get(
-                "content") or fields.get("chunk") or fields.get("body") or ""
+            text_val = fields.get("text") or fields.get("content") or fields.get("chunk") or fields.get("body") or ""
             out.append({
                 "id": h.get("_id"),
                 "score": h.get("_score"),
@@ -240,14 +209,9 @@ def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
     return []
 
 # ---------- Answering ----------
-
-
 def build_context(snippets: List[str], max_chars: int = 6000) -> str:
-    blob = (
-        "\n\n".join(s.strip() for s in snippets if s.strip())
-    )
+    blob = ("\n\n".join(s.strip() for s in snippets if s.strip()))
     return blob if len(blob) <= max_chars else blob[:max_chars]
-
 
 def answer_question(question: str, context: str) -> str:
     prompt = f"""You are a helpful assistant. Answer the question using ONLY the context below.
@@ -269,9 +233,32 @@ If the answer cannot be found in the context, say you don't know.
     )
     return chat.choices[0].message.content.strip()
 
-
 # ---------- UI ----------
-st.title("🔎 Apple(s) & BMS")
+st.image(
+    "https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
+    width=300,
+)
+st.title("Apple(s) & BMS")
+
+# Main content / Roadmap & disclaimer
+st.write(
+    """
+    Welcome! 👋  
+    This app is an experimental chatbot that allows users to ask questions about:  
+    - 🍎 Apples (the fruit) versus 💻 Apple Inc. and  
+    - 🏢 Building Management Systems (BMS) at the University of Bristol  
+
+    ⚠️ **Disclaimer**: This app is under active development and should not be used for decision-making.  
+    Use is at the user's own discretion, and the developers accept no liability for outcomes based on the information provided.  
+
+    To get started, type your question below.  
+
+    ---
+    **Note for users**:  
+    - `docs-from-s3` is the index for BMS-related questions.  
+    - `llama-text-embed-v2-index` is the index for Apple(s)-related questions.  
+    """
+)
 
 with st.sidebar:
     st.header("Connection")
@@ -290,12 +277,12 @@ with st.sidebar:
         default_ns = next((n for n in ns_options if n), "")
         display_labels = ["(default)" if n == "" else n for n in ns_options]
         try:
-            default_ix = display_labels.index(
-                "(default)") if default_ns == "" else display_labels.index(default_ns)
+            default_ix = display_labels.index("(default)") if default_ns == "" else display_labels.index(default_ns)
         except ValueError:
             default_ix = 0
         selected_label = st.selectbox(
-            "Namespace", options=display_labels, index=default_ix, help="From index stats")
+            "Namespace", options=display_labels, index=default_ix, help="From index stats"
+        )
         namespace = "" if selected_label == "(default)" else selected_label
     else:
         # Fallback in case there are no indexes yet
@@ -316,15 +303,16 @@ with st.sidebar:
         )
         # Optional: allow user to also generate an OpenAI answer from retrieved results.
         generate_llm_answer_for_special = st.checkbox(
-            "Also generate an OpenAI answer (uses retrieved results as context)", value=False,
-            help="Safe to enable: retrieval still uses Pinecone; OpenAI only generates the final text.")
+            "Also generate an OpenAI answer (uses retrieved results as context)",
+            value=False,
+            help="Safe to enable: retrieval still uses Pinecone; OpenAI only generates the final text.",
+        )
         query_mode = "Inference (server-side)"
         EMBED_MODEL = None
     else:
         query_mode = st.selectbox(
             "Query mode",
-            options=["Auto", "Inference (server-side)",
-                     "Vector (client-side)"],
+            options=["Auto", "Inference (server-side)", "Vector (client-side)"],
             index=0,
             help="Auto tries server-side inference first, then falls back to vector query.",
         )
@@ -339,10 +327,9 @@ with st.sidebar:
         st.write(f"**Index:** {index_name or '—'}")
         if force_inference_for_special:
             st.write(f"**Forced inference model:** {SPECIAL_INFERENCE_MODEL}")
-        st.caption(
-            "Server-side inference runs inside Pinecone; vector mode embeds locally.")
+        st.caption("Server-side inference runs inside Pinecone; vector mode embeds locally.")
 
-query = st.text_input("Your question", placeholder="Ask me about apple(s) or BMS")
+query = st.text_input("", placeholder="Ask me about apple(s) or BMS")
 col_search, col_clear = st.columns([1, 1])
 with col_search:
     go = st.button("Search")
@@ -361,18 +348,15 @@ if go and index_name and query.strip():
             if query_mode in ["Inference (server-side)", "Auto"]:
                 try:
                     inference_model_to_use = SPECIAL_INFERENCE_MODEL if force_inference_for_special else None
-                    results = try_inference_search(
-                        idx, namespace, query, top_k, model_name=inference_model_to_use)
+                    results = try_inference_search(idx, namespace, query, top_k, model_name=inference_model_to_use)
                     mode_used = "server-side (inference)"
                 except Exception as e:
                     if query_mode == "Inference (server-side)":
                         raise
-                    results = vector_query(
-                        idx, namespace, query, top_k, EMBED_MODEL or DEFAULT_EMBED_MODEL)
+                    results = vector_query(idx, namespace, query, top_k, EMBED_MODEL or DEFAULT_EMBED_MODEL)
                     mode_used = "client-side (vector)"
             else:
-                results = vector_query(
-                    idx, namespace, query, top_k, EMBED_MODEL or DEFAULT_EMBED_MODEL)
+                results = vector_query(idx, namespace, query, top_k, EMBED_MODEL or DEFAULT_EMBED_MODEL)
                 mode_used = "client-side (vector)"
             matches = normalize_matches(results)
         except Exception as e:
