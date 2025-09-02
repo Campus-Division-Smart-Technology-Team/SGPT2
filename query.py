@@ -67,30 +67,7 @@ ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 # Logo
 st.image(
     "https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
-    width=78,
-)
-
-# Main content / Roadmap & disclaimer
-st.write(
-    """
-    # Streamlit Roadmap
-
-    Welcome to our roadmap! 👋  
-    This app is an experimental chatbot that allows users to ask questions about:  
-    - 🍎 Apples (the fruit)  
-    - 💻 Apple Inc.  
-    - 🏢 Building Management Systems (BMS) at the University of Bristol  
-
-    ⚠️ **Disclaimer**: This app is under active development and should not be used for decision-making.  
-    Use is at the user's own discretion, and the developers accept no liability for outcomes based on the information provided.  
-
-    To get started, type your question below.  
-
-    ---
-    **Note for users**:  
-    - `docs-from-s3` is the index for BMS-related questions.  
-    - `llama-text-embed-v2-index` is the index for Apple(s)-related questions.  
-    """
+    width=90,
 )
 
 # ---------- Clients ----------
@@ -265,6 +242,29 @@ If the answer cannot be found in the context, say you don't know.
 
 # ---------- UI ----------
 st.title("🔎 Apple(s) & BMS")
+
+# Main content / Roadmap & disclaimer
+st.write(
+    """
+    ## Streamlit App (Dev)
+
+    Welcome to our roadmap! 👋  
+    This app is an experimental chatbot that allows users to ask questions about:  
+    - 🍎 Apples (the fruit)  
+    - 💻 Apple Inc.  
+    - 🏢 Building Management Systems (BMS) at the University of Bristol  
+
+    ⚠️ **Disclaimer**: This app is under active development and should not be used for decision-making.  
+    Use is at the user's own discretion, and the developers accept no liability for outcomes based on the information provided.  
+
+    To get started, type your question below.  
+
+    ---
+    **Note for users**:  
+    - `docs-from-s3` is the index for BMS-related questions.  
+    - `llama-text-embed-v2-index` is the index for Apple(s)-related questions.  
+    """
+)
 
 with st.sidebar:
     st.header("Connection")
