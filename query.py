@@ -246,9 +246,7 @@ st.title("🔎 Apple(s) & BMS")
 # Main content / Roadmap & disclaimer
 st.write(
     """
-    ## Streamlit App (Dev)
-
-    Welcome to our roadmap! 👋  
+    Welcome! 👋  
     This app is an experimental chatbot that allows users to ask questions about:  
     - 🍎 Apples (the fruit)  
     - 💻 Apple Inc.  
@@ -335,7 +333,7 @@ with st.sidebar:
             st.write(f"**Forced inference model:** {SPECIAL_INFERENCE_MODEL}")
         st.caption("Server-side inference runs inside Pinecone; vector mode embeds locally.")
 
-query = st.text_input("Your question", placeholder="Ask me about apple(s) or BMS")
+query = st.text_input(placeholder="Ask me about apple(s) or BMS")
 col_search, col_clear = st.columns([1, 1])
 with col_search:
     go = st.button("Search")
