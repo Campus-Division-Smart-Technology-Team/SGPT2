@@ -63,13 +63,6 @@ SPECIAL_INFERENCE_MODEL = "llama-text-embed-v2"
 DEFAULT_EMBED_MODEL = os.getenv("DEFAULT_EMBED_MODEL", "text-embedding-3-small")
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 
-# ---------- Header / Branding ----------
-# Logo
-st.image(
-    "https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
-    width=90,
-)
-
 # ---------- Clients ----------
 def get_oai() -> OpenAI:
     return OpenAI()
@@ -241,7 +234,11 @@ If the answer cannot be found in the context, say you don't know.
     return chat.choices[0].message.content.strip()
 
 # ---------- UI ----------
-st.title("🔎 Apple(s) & BMS")
+st.image(
+    "https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
+    width=90,
+)
+st.title("Apple(s) & BMS")
 
 # Main content / Roadmap & disclaimer
 st.write(
