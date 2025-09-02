@@ -82,9 +82,9 @@ pc = get_pc()
 
 
 @st.cache_data(ttl=30)
-def cached_list_index_names(pc_client: Pinecone) -> List[str]:
+def cached_list_index_names(_pc_client: Pinecone) -> List[str]:
     try:
-        idxs = pc_client.list_indexes()
+        idxs = _pc_client.list_indexes()
     except Exception:
         return []
     if hasattr(idxs, "names"):
@@ -99,10 +99,10 @@ def list_index_names() -> List[str]:
 
 
 @st.cache_data(ttl=30)
-def list_namespaces_for_index(idx) -> List[str]:
+def list_namespaces_for_index(_idx) -> List[str]:
     """Return namespaces present in the index via describe_index_stats()."""
     try:
-        stats = idx.describe_index_stats()
+        stats = _idx.describe_index_stats()
         ns = (stats.get("namespaces") if isinstance(stats, dict) else None) or {}
         names = sorted(list(ns.keys()))
         return names or [""]
