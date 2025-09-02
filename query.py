@@ -16,7 +16,7 @@ Notes for Pinecone >=7:
   `filter`, `include_metadata`. Do not include `model` there; model comes from
   the index's attached inference config.
 - Some responses return `{"matches": [...]}`. Others return
-  `{"result": {"hits": [...]}}`. This app normalizes both.
+  `{"result": {"hits": [...]}}`. This app normalises both.
 
 Environment variables:
 - PINECONE_API_KEY
@@ -33,7 +33,7 @@ from pinecone import Pinecone
 from openai import OpenAI
 
 # ---------- App & env ----------
-st.set_page_config(page_title="Pinecone Q&A", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="Apples & BMS", page_icon="🔎", layout="wide")
 
 # Try to load a local .env if python-dotenv is available; otherwise ignore
 try:
@@ -200,7 +200,7 @@ def _as_dict(obj: Any) -> Dict[str, Any]:
 
 
 def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
-    """Normalize Pinecone results from either `matches` or `result.hits` shapes."""
+    """ Normalise Pinecone results from either `matches` or `result.hits` shapes."""
     data = _as_dict(raw)
     matches = []
 
@@ -271,7 +271,7 @@ If the answer cannot be found in the context, say you don't know.
 
 
 # ---------- UI ----------
-st.title("🔎 Pinecone Q&A")
+st.title("🔎 Apple(s) & BMS")
 
 with st.sidebar:
     st.header("Connection")
