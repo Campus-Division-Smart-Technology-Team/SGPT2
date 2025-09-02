@@ -236,7 +236,7 @@ If the answer cannot be found in the context, say you don't know.
 # ---------- UI ----------
 st.image(
     "https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
-    width=90,
+    width=300,
 )
 st.title("Apple(s) & BMS")
 
