@@ -245,8 +245,7 @@ st.write(
     """
     Welcome! 👋  
     This app is an experimental chatbot that allows users to ask questions about:  
-    - 🍎 Apples (the fruit)  
-    - 💻 Apple Inc.  
+    - 🍎 Apples (the fruit) versus 💻 Apple Inc. and  
     - 🏢 Building Management Systems (BMS) at the University of Bristol  
 
     ⚠️ **Disclaimer**: This app is under active development and should not be used for decision-making.  
