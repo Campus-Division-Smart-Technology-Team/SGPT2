@@ -1,4 +1,5 @@
 streamlit==1.49.1
 openai>=1.0.0
-pinecone>=7.0.0
+pinecone>=7.3.0
 python-dotenv>=1.0.0
+
