@@ -268,7 +268,7 @@ st.markdown(
     <style>
       .uob-header {
         position: relative;
-        background: rgba(227, 230, 229, 0.5);
+        background: rgba(227, 230, 229, 0.7);
         padding: 1.25rem 1.5rem;
         border-radius: 12px;
         display: flex;
