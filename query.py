@@ -258,11 +258,65 @@ If the answer cannot be found in the context, say you don't know.
 
 
 # ---------- UI ----------
-st.image(
-    "https://cdn.brandfetch.io/idWwwm9Vvi/w/820/h/237/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
-    width=200,
+# st.image(
+#     "https://www.bristol.ac.uk/assets/responsive-web-project/2.6.9/images/logos/uob-logo.svg",
+#     width=200,
+# )
+# st.title("Apple(s) & BMS")
+st.markdown(
+    """
+    <style>
+      .uob-header {
+        position: relative;
+        background: rgba(227, 230, 229, 0.3);
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 20px;
+      }
+
+      /* Light theme override */
+      @media (prefers-color-scheme: light) {
+        .uob-header {
+          background: rgba(171, 31, 45, 0.05);
+          border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+      }
+
+      .uob-header img { height: 70px; z-index: 2;}
+      .uob-header h1 {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        margin: 0;
+        font-size: 2rem;
+      }
+    </style>
+
+    <div class="uob-header">
+      <picture>
+        <!-- Light theme logo -->
+        <source
+          srcset="https://www.bristol.ac.uk/assets/responsive-web-project/2.6.9/images/logos/uob-logo.svg"
+          media="(prefers-color-scheme: light)"/>
+        <!-- Dark theme logo -->
+        <source
+          srcset="https://www.bristol.ac.uk/assets/responsive-web-project/2.6.9/images/logos/uob-logo.svg"/>
+        <!-- Fallback (used if media queries aren't supported) -->
+        <img
+          src="https://www.bristol.ac.uk/assets/responsive-web-project/2.6.9/images/logos/uob-logo.svg"
+          alt="University of Bristol"/>
+      </picture>
+
+      <h1>🍎 Apple(s) &amp; BMS 💻</h1>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
-st.title("Apple(s) & BMS")
 
 # Main content / Roadmap & disclaimer
 st.write(
