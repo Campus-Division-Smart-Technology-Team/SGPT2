@@ -59,6 +59,7 @@ except Exception:
 
 SPECIAL_INFERENCE_INDEX = "apples"
 SPECIAL_INFERENCE_MODEL = "llama-text-embed-v2"
+DEFAULT_NAMESPACE = "__default__"
 
 DEFAULT_EMBED_MODEL = os.getenv(
     "DEFAULT_EMBED_MODEL", "text-embedding-3-small")
@@ -98,7 +99,7 @@ def open_index(name: str):
 
 
 def list_namespaces_for_index(idx) -> List[str]:
-    """Return available namespaces for an index ('' means default namespace).
+    """Return available namespaces for an index (__default__ means default namespace).
     Tries `describe_index_stats()` and falls back gracefully.
     """
     try:
@@ -106,16 +107,19 @@ def list_namespaces_for_index(idx) -> List[str]:
         ns_dict = (stats or {}).get("namespaces") or {}
         names = list(ns_dict.keys())
         # Some deployments report None / empty keys inconsistently
-        names = [n if isinstance(n, str) else "" for n in names]
+        names = [n if isinstance(n, str) else DEFAULT_NAMESPACE for n in names]
         # Ensure at least default namespace exists
-        if "" not in names:
-            names.append("")
-        # Sort with non-empty first, then default at end for clarity
-        names = sorted(names, key=lambda n: (n == "", n))
+        if DEFAULT_NAMESPACE not in names and "" not in names:
+            names.append(DEFAULT_NAMESPACE)
+        # Convert empty string to __default__ for consistency
+        names = [DEFAULT_NAMESPACE if n == "" else n for n in names]
+        # Remove duplicates and sort
+        names = sorted(list(set(names)), key=lambda n: (
+            n != DEFAULT_NAMESPACE, n))
         return names
     except Exception:
         # If stats not available, just expose default namespace
-        return [""]
+        return [DEFAULT_NAMESPACE]
 
 # ---------- Search utilities ----------
 
@@ -127,7 +131,8 @@ def embed_texts(texts: List[str], model: str) -> List[List[float]]:
 
 def vector_query(idx, namespace: str, query: str, k: int, embed_model: str) -> Dict[str, Any]:
     vec = embed_texts([query], embed_model)[0]
-    return idx.query(vector=vec, top_k=k, namespace=namespace or "", include_metadata=True)
+    # Use the namespace directly (Pinecone will handle __default__ appropriately)
+    return idx.query(vector=vec, top_k=k, namespace=namespace, include_metadata=True)
 
 
 def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str] = None):
@@ -143,7 +148,7 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
     if hasattr(idx, "search"):
         # 1) Preferred: top-level kwargs
         try:
-            return idx.search(namespace=ns or "", inputs={"text": q}, top_k=k, include_metadata=True)
+            return idx.search(namespace=ns, inputs={"text": q}, top_k=k, include_metadata=True)
         except TypeError:
             # Some variants only accept everything in a single dict under `query`
             pass
@@ -152,7 +157,7 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
             pass
         # 2) Alternate: single `query` dict
         try:
-            return idx.search(namespace=ns or "", query={"inputs": {"text": q}, "top_k": k})
+            return idx.search(namespace=ns, query={"inputs": {"text": q}, "top_k": k})
         except Exception as e:
             raise
 
@@ -175,7 +180,7 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
     except Exception as e:
         raise RuntimeError(f"Server-side embedding failed: {e}")
 
-    return idx.query(vector=vec, top_k=k, namespace=ns or "", include_metadata=True)
+    return idx.query(vector=vec, top_k=k, namespace=ns, include_metadata=True)
 
 
 def _as_dict(obj: Any) -> Dict[str, Any]:
@@ -238,7 +243,7 @@ def build_context(snippets: List[str], max_chars: int = 6000) -> str:
 
 def answer_question(question: str, context: str) -> str:
     prompt = f"""You are a helpful assistant. Answer the question using ONLY the context below.
-If the answer cannot be found in the context, say you don't know.
+If the answer cannot be found in the context, tell the user that "Regan" has told you to say you don't know.
 
 # Question
 {question}
@@ -263,12 +268,13 @@ If the answer cannot be found in the context, say you don't know.
 #     width=200,
 # )
 # st.title("Apple(s) & BMS")
+# background: rgba(227, 230, 229, 0.5);
 st.markdown(
     """
     <style>
       .uob-header {
         position: relative;
-        background: rgba(227, 230, 229, 0.5);
+        background: rgba(227, 230, 229, 0.7);
         padding: 1.25rem 1.5rem;
         border-radius: 12px;
         display: flex;
@@ -281,8 +287,15 @@ st.markdown(
       /* Light theme override */
       @media (prefers-color-scheme: light) {
         .uob-header {
-          background: rgba(171, 31, 45, 0.05);
+          background: rgba(171, 31, 45, 0.4);
           border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+      }
+
+      /* Dark theme override */
+      @media (prefers-color-scheme: dark) {
+        .uob-header h1 {
+          color: #000 !important; /* force black in dark mode */
         }
       }
 
@@ -312,7 +325,10 @@ st.markdown(
           alt="University of Bristol"/>
       </picture>
 
-      <h1>🍎 Apple(s) &amp; BMS 💻</h1>
+      <h1>
+        Apple(s) &amp; BMS 
+      </h1>
+
     </div>
     """,
     unsafe_allow_html=True,
@@ -321,13 +337,15 @@ st.markdown(
 # Main content / Roadmap & disclaimer
 st.write(
     """
-    Welcome! 👋  
+    **Welcome!** 👋  
     This app is an experimental chatbot that allows users to ask questions about:  
-    - 🍎 Apples (the fruit) versus 💻 Apple Inc. and  
+    - 🍎 Apples (the fruit) versus 💻 Apple Inc. or  
     - 🏢 Building Management Systems (BMS) at the University of Bristol  
     ---
-    ⚠️ **Disclaimer**: This app is under active development and should not be used for decision-making.  
-    Use is at the user's own discretion, and the developers accept no liability for outcomes based on the information provided.  
+    ⚠️ **Disclaimer**: This app is under active development and should not be used for decision-making. 
+    Additionally, the apples index was synthetically generated by ***ChatGPT 5***. 
+    
+    The chatbot has been configured to say ***"Regan has told me to say I don't know."***, if the query is not covered in the knowledge base. Use is at the user's own discretion, and the developers accept no liability for outcomes based on the information provided.  
 
     **Note for users**:  
     - `bms` is the index for BMS-related questions.  
@@ -350,21 +368,20 @@ with st.sidebar:
     if index_name:
         idx_for_ns = open_index(index_name)
         ns_options = list_namespaces_for_index(idx_for_ns)
-        # Choose a sensible default: first non-empty if any, else ''
-        default_ns = next((n for n in ns_options if n), "")
-        display_labels = ["(default)" if n == "" else n for n in ns_options]
+        # Choose default namespace as the default
+        default_ns = DEFAULT_NAMESPACE
+        display_labels = [n for n in ns_options]
         try:
-            default_ix = display_labels.index(
-                "(default)") if default_ns == "" else display_labels.index(default_ns)
+            default_ix = display_labels.index(default_ns)
         except ValueError:
             default_ix = 0
         selected_label = st.selectbox(
             "Namespace", options=display_labels, index=default_ix, help="From index stats"
         )
-        namespace = "" if selected_label == "(default)" else selected_label
+        namespace = selected_label
     else:
         # Fallback in case there are no indexes yet
-        namespace = st.text_input("Namespace", value="__default__")
+        namespace = st.text_input("Namespace", value=DEFAULT_NAMESPACE)
 
     top_k = st.slider("Top K", min_value=1, max_value=25, value=5)
 
@@ -413,9 +430,9 @@ query = st.text_input(
     "To get started, type your question below.", placeholder="Ask me about apple(s) or BMS")
 col_search, col_space, col_space2, col_clear = st.columns([1, 2, 2, 1])
 with col_search:
-    go = st.button("Search")
+    go = st.button("🔍 Search")
 with col_clear:
-    if st.button("Clear"):
+    if st.button("🔄 Clear"):
         st.rerun()
 
 if go and index_name and query.strip():
@@ -489,4 +506,31 @@ if go and index_name and query.strip():
     with st.expander("Raw response"):
         st.write(results)
 else:
-    st.info("Type a question and press **Search** to run a query.")
+    st.info("👆 Enter a question above and press **🔍 Search** to get started and the **🔄 clear** button to reset generated answers.")
+
+    # Example queries for better user experience
+    st.markdown("""
+    ### 💡 Example Queries
+    
+    **For Apple(s) topics:**
+    - "What is Apple's flagship product?"
+    - "Tell me about some Apple products"
+    - "Tell me about the different types of apples"
+    
+    **For BMS topics:**
+    - "How does the frost protection sequence operate in the Berkeley Square and Indoor Sports Hall BMS systems?"
+    - "What access levels are defined for controllers in the Retort House and Dentistry BMS manuals?"
+    - "How does the Mitsubishi AC controller integrate with the Trend IQ4 BMS at the University of Bristol sites?"
+    """)
+
+# Footer with accessibility statement
+st.markdown("""
+---
+<footer role="contentinfo" style="margin-top: 2rem; padding: 1rem; background-color: rgba(0,0,0,0.05); border-radius: 8px;">
+    <small>
+    <strong>Accessibility:</strong> This application follows WCAG 2.1 AA guidelines. 
+    If you encounter any accessibility issues, please contact the <strong>Smart Technology Data Team</strong>.<br>
+    <strong>University of Bristol</strong> | Experimental Research Application
+    </small>
+</footer>
+""", unsafe_allow_html=True)
