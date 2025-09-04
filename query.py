@@ -364,7 +364,7 @@ with st.sidebar:
         namespace = "" if selected_label == "(default)" else selected_label
     else:
         # Fallback in case there are no indexes yet
-        namespace = st.text_input("Namespace", value="default")
+        namespace = st.text_input("Namespace", value="__default__")
 
     top_k = st.slider("Top K", min_value=1, max_value=25, value=5)
 
