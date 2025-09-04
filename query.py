@@ -545,7 +545,7 @@ st.markdown("""
 ---
 <footer role="contentinfo" style="margin-top: 2rem; padding: 1rem; background-color: rgba(0,0,0,0.05); border-radius: 8px;">
     <small>
-    <strong>Accessibility:</strong> This application follows WCAG 2.1 AA guidelines. 
+    <strong>Accessibility:</strong> This application follows WCAG 2.2 AA guidelines. 
     If you encounter any accessibility issues, please contact the <strong>Smart Technology Data Team</strong>.<br>
     <strong>University of Bristol</strong> | Experimental Research Application
     </small>
