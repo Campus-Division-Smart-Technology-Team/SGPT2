@@ -42,7 +42,7 @@ if not OPENAI_API_KEY:
 # -------------- Config (edit or override via env/CLI) --------------
 DEFAULT_BUCKET = os.getenv("BUCKET", "desopsus")
 DEFAULT_PREFIX = os.getenv("PREFIX", "")             # e.g., "docs/"
-INDEX_NAME = os.getenv("INDEX_NAME", "docs-from-s3")
+INDEX_NAME = os.getenv("INDEX_NAME", "bms")
 NAMESPACE = os.getenv("NAMESPACE") or None
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")  # 1536 dims
 DIMENSION = int(os.getenv("DIMENSION", "1536"))

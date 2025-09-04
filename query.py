@@ -4,7 +4,7 @@
 Streamlit Q&A over a Pinecone index with University of Bristol branding and intro.
 
 Behavior:
-- When the selected index is exactly "llama-text-embed-v2-index", use Pinecone
+- When the selected index is exactly "apples", use Pinecone
   server-side inference with the attached model (llama-text-embed-v2) to search
   and ONLY display the search results (no LLM-generated answer).
 - Other indexes behave as usual: you can use server-side inference when available
@@ -57,7 +57,7 @@ except Exception:
     # st.secrets may not exist locally; ignore
     pass
 
-SPECIAL_INFERENCE_INDEX = "llama-text-embed-v2-index"
+SPECIAL_INFERENCE_INDEX = "apples"
 SPECIAL_INFERENCE_MODEL = "llama-text-embed-v2"
 
 DEFAULT_EMBED_MODEL = os.getenv(
@@ -330,8 +330,8 @@ st.write(
     Use is at the user's own discretion, and the developers accept no liability for outcomes based on the information provided.  
 
     **Note for users**:  
-    - `docs-from-s3` is the index for BMS-related questions.  
-    - `llama-text-embed-v2-index` is the index for Apple(s)-related questions.  
+    - `bms` is the index for BMS-related questions.  
+    - `apples` is the index for Apple(s)-related questions.  
     ---
     """
 
