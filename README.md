@@ -7,9 +7,10 @@ This project ingests documents from **AWS S3**, converts them into **embeddings 
 ## :file_folder: Project Structure
   ```
   .
-├── ingest.py # Ingests files from S3 → OpenAI embeddings → Pinecone
+├── batch_ingest.py # Ingests files from S3 → OpenAI embeddings → Pinecone
 ├── buildindex.py # Ensures Pinecone index exists (creates if missing)
 ├── query.py # Streamlit app for semantic search & Q&A
+├── singleindexquery.py # Streamlit app for semantic search & Q&A (federated index)
 ├── main.py # Simple OpenAI example (story generation)
 ├── test.py # Test env & keys (AWS, Pinecone, OpenAI)
 ├── Requirements.txt # Python dependencies
@@ -77,7 +78,7 @@ python buildindex.py
    
 2. Ingest documents from S3
 ```
-python ingest.py --bucket your-bucket-name --prefix your-folder/
+python batch_ingest.py --bucket your-bucket-name --prefix your-folder/
 ```
   > Extracts text from supported files (`.pdf`, `.docx`, `.txt`, `.md`, `.csv`, `.json`)
   > Splits into overlapping chunks (default 500 tokens)
@@ -86,13 +87,14 @@ python ingest.py --bucket your-bucket-name --prefix your-folder/
 3. Run Q&A interface
 ```
 streamlit run query.py
+# or singleindexquery.py for federated index query
 ```
   >Enter your question in the UI
   >Results are retrieved from Pinecone
   >OpenAI synthesises a final answer citing sources
 
 ## :wrench: Customisation
-1. Change defaults in `ingest.py` (e.g., `CHUNK_TOKENS`, `EMBED_MODEL`, `UPSERT_BATCH`).
+1. Change defaults in `batch_ingest.py` (e.g., `CHUNK_TOKENS`, `EMBED_MODEL`, `UPSERT_BATCH`).
 2. Adjust Pinecone `INDEX_NAME` and `NAMESPACE` in .env.
 3. Extend `EXT_WHITELIST` in `ingest.py` to support more file formats.
 
