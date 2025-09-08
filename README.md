@@ -10,6 +10,7 @@ This project ingests documents from **AWS S3**, converts them into **embeddings 
 ├── batch_ingest.py # Ingests files from S3 → OpenAI embeddings → Pinecone
 ├── buildindex.py # Ensures Pinecone index exists (creates if missing)
 ├── federatedquery.py # Streamlit app for semantic search & Q&A (federated index)
+├── alfred.py # chat version of the federatedquery.py
 ├── unfederatedquery.py # Streamlit app for semantic search & Q&A 
 ├── main.py # Simple OpenAI example (story generation)
 ├── test.py # Test env & keys (AWS, Pinecone, OpenAI)
