@@ -79,7 +79,7 @@ class QueryClassifier:
     def get_greeting_response() -> str:
         """Return a greeting response."""
         greetings = [
-            "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• 🍎 Apples (the fruit) and Apple Inc.\n• 🏢 Building Management Systems (BMS)\n\nWhat would you like to know today?",
+            "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• 🍎 Apples (the fruit) and Apple Inc.\n\n• 🏢 Building Management Systems (BMS)\n\nWhat would you like to know today?",
             "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about apples or BMS systems. How can I assist you?",
             "Hello! Alfred here, your University of Bristol assistant. I have access to information about apples and building management systems. What can I help you with?"
         ]
