@@ -26,6 +26,7 @@ Tuple[str, str]:
     # Get the key from top result
     key_value = top_result.get("key", "")
     idx_name = top_result.get("index", "")
+    source_value = top_result.get("source", "")
 
     latest_date = None
     source_doc_count = 1
@@ -45,7 +46,7 @@ Tuple[str, str]:
         publication_info = f"📅 Document last updated: **{display_date}** (from {key_value}, searched {source_doc_count} related chunks)"
     else:
         date_context = f"The publication date for document '{key_value}' could not be determined."
-        publication_info = f"📅 **Publication date unknown** (document: {key_value})"
+        publication_info = f"📅 **Publication date unknown** -- {source_value} --)"
 
     # Build context from all results
     snippets = [r.get("text", "") for r in all_results if r.get("text")]
