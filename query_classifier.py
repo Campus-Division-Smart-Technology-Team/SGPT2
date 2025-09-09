@@ -128,16 +128,16 @@ class QueryClassifier:
         return random.choice(responses)
 
 
-    def should_search_index(query: str) -> Tuple[bool, Optional[str]]:
-        """
-        Determine if a query requires an index search or can be answered directly.
-    
-        Returns:
-            (should_search, direct_response)
-        """
-        query_type, suggested_response = QueryClassifier.classify_query(query)
-    
-        if query_type == 'search':
-            return True, None
-        else:
-            return False, suggested_response
+def should_search_index(query: str) -> Tuple[bool, Optional[str]]:
+    """
+    Determine if a query requires an index search or can be answered directly.
+
+    Returns:
+        (should_search, direct_response)
+    """
+    query_type, suggested_response = QueryClassifier.classify_query(query)
+
+    if query_type == 'search':
+        return True, None
+    else:
+        return False, suggested_response
