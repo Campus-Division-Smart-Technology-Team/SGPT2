@@ -92,10 +92,10 @@ class QueryClassifier:
         I'm Alfred 🦍, a specialised assistant for the University of Bristol's Smart Technology team.
 
         **What I can do:**
-        • Search and retrieve information from our knowledge bases
-        • Answer questions about apples (both the fruit and Apple Inc.)
-        • Provide information about Building Management Systems (BMS) at the university
-        • Tell you when documents were last updated or published
+        - Search and retrieve information from our knowledge bases
+        - Answer questions about apples (both the fruit and Apple Inc.)
+        - Provide information about Building Management Systems (BMS) at the university
+        - Tell you when documents were last updated or published
         
         **How to use me:**
         Simply type your question in natural language. I'll search through the relevant indexes and provide you with:
