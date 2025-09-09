@@ -91,13 +91,13 @@ class QueryClassifier:
         return """
         I'm Alfred 🦍, a specialised assistant for the University of Bristol's Smart Technology team.
 
-        **What I can do:** \n\n
-        • Search and retrieve information from our knowledge bases \n\n
-        • Answer questions about apples (both the fruit and Apple Inc.) \n\n
-        • Provide information about Building Management Systems (BMS) at the university \n\n
-        • Tell you when documents were last updated or published \n\n
+        **What I can do:**
+        • Search and retrieve information from our knowledge bases
+        • Answer questions about apples (both the fruit and Apple Inc.)
+        • Provide information about Building Management Systems (BMS) at the university
+        • Tell you when documents were last updated or published
         
-        **How to use me:** \n\n
+        **How to use me:**
         Simply type your question in natural language. I'll search through the relevant indexes and provide you with:
         - A comprehensive answer based on the available information
         - The publication or update date of the source material
