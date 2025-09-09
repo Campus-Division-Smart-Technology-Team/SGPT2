@@ -84,7 +84,7 @@ def render_header():
             <source srcset="https://www.bristol.ac.uk/assets/responsive-web-project/2.6.9/images/logos/uob-logo.svg"/>
             <img src="https://www.bristol.ac.uk/assets/responsive-web-project/2.6.9/images/logos/uob-logo.svg" alt="University of Bristol"/>
           </picture>
-          <h1>🦍 Alfred the Gorilla</h1>
+          <h1>🦍 Alfred</h1>
         </div>
         """,
         unsafe_allow_html=True,
@@ -252,7 +252,7 @@ def initialize_chat_history():
         st.session_state.messages = [
             {
                 "role": "assistant",
-                "content": "Hello! I'm Alfred the Gorilla 🦍, your helpful assistant at the University of Bristol. I can help you find information about apples and Building Management Systems. What would you like to know?"
+                "content": "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about apples and Building Management Systems. What would you like to know?"
             }
         ]
 
