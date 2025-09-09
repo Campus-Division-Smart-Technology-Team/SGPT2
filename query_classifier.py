@@ -88,21 +88,22 @@ class QueryClassifier:
     @staticmethod
     def get_about_response() -> str:
         """Return information about Alfred."""
-        return """I'm Alfred 🦍, a specialised assistant for the University of Bristol's Smart Technology team.
+        return """
+        I'm Alfred 🦍, a specialised assistant for the University of Bristol's Smart Technology team.
 
-**What I can do:**
-• Search and retrieve information from our knowledge bases
-• Answer questions about apples (both the fruit and Apple Inc.)
-• Provide information about Building Management Systems (BMS) at the university
-• Tell you when documents were last updated or published
-
-**How to use me:**
-Simply type your question in natural language. I'll search through the relevant indexes and provide you with:
-- A comprehensive answer based on the available information
-- The publication or update date of the source material
-- Links to view the raw search results if you need more detail
-
-**Note:** My knowledge is limited to what's in the indexed documents. If I can't find something, I'll let you know honestly rather than making things up."""
+        **What I can do:**
+        • Search and retrieve information from our knowledge bases
+        • Answer questions about apples (both the fruit and Apple Inc.)
+        • Provide information about Building Management Systems (BMS) at the university
+        • Tell you when documents were last updated or published
+        
+        **How to use me:**
+        Simply type your question in natural language. I'll search through the relevant indexes and provide you with:
+        - A comprehensive answer based on the available information
+        - The publication or update date of the source material
+        - Links to view the raw search results if you need more detail
+        
+        **Note:** My knowledge is limited to what's in the indexed documents. If I can't find something, I'll let you know honestly rather than making things up."""
 
     @staticmethod
     def get_gratitude_response() -> str:
@@ -127,16 +128,16 @@ Simply type your question in natural language. I'll search through the relevant 
         return random.choice(responses)
 
 
-def should_search_index(query: str) -> Tuple[bool, Optional[str]]:
-    """
-    Determine if a query requires an index search or can be answered directly.
-
-    Returns:
-        (should_search, direct_response)
-    """
-    query_type, suggested_response = QueryClassifier.classify_query(query)
-
-    if query_type == 'search':
-        return True, None
-    else:
-        return False, suggested_response
+    def should_search_index(query: str) -> Tuple[bool, Optional[str]]:
+        """
+        Determine if a query requires an index search or can be answered directly.
+    
+        Returns:
+            (should_search, direct_response)
+        """
+        query_type, suggested_response = QueryClassifier.classify_query(query)
+    
+        if query_type == 'search':
+            return True, None
+        else:
+            return False, suggested_response
