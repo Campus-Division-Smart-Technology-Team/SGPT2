@@ -86,7 +86,7 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
         top_score = top_hits[0].get("score", 0)
         if top_score < MIN_SCORE_THRESHOLD:
             score_too_low = True
-            answer = f"I found some results, but they don't seem relevant enough to your question (best match score: {top_score:.3f}, threshold: {MIN_SCORE_THRESHOLD}). Regan has told me to say I don't know. Please try rephrasing your question or asking about something else."
+            answer = f"I found some results, but they don't seem relevant enough to your question. The best matching score was {top_score:.3f}, which is below the allowable threshold of {MIN_SCORE_THRESHOLD}. Regan has told me to say I don't know. Please try rephrasing your question or asking about something else."
             return top_hits, answer, publication_date_info, score_too_low
 
     if top_hits and st.session_state.get("generate_llm_answer", True):
