@@ -149,18 +149,26 @@ def format_date_information(planon_date: Optional[str],
     display_parts = []
 
     # Format operational document date FIRST (it's the primary date)
-    if operational_date and operational_doc_key:
+    if operational_date:  # ✅ FIXED: Only require the date, not the key
         parsed = parse_date_string(operational_date)
         display_date = format_display_date(parsed)
 
-        # Clean up the document key for display (remove path and .pdf)
-        doc_display = operational_doc_key.replace(
-            'UoB-', '').replace('.pdf', '').replace('-', ' ')
+        # Build context string
+        if operational_doc_key:
+            # Clean up the document key for display (remove path and .pdf)
+            doc_display = operational_doc_key.replace(
+                'UoB-', '').replace('.pdf', '').replace('-', ' ')
 
-        context_parts.append(
-            f"BMS/Operational documentation ('{operational_doc_key}'): Last updated {display_date}. This is the primary date for technical/BMS information.")
-        display_parts.append(
-            f"📄 **Document last updated**: **{display_date}** ({doc_display})")
+            context_parts.append(
+                f"BMS/Operational documentation ('{operational_doc_key}'): Last updated {display_date}. This is the primary date for technical/BMS information.")
+            display_parts.append(
+                f"📄 **Document last updated**: **{display_date}** ({doc_display})")
+        else:
+            # No key, but we have a date
+            context_parts.append(
+                f"BMS/Operational documentation: Last updated {display_date}. This is the primary date for technical/BMS information.")
+            display_parts.append(
+                f"📄 **Document last updated**: **{display_date}**")
     elif operational_doc_key:
         # We have the doc but no date
         doc_display = operational_doc_key.replace(
