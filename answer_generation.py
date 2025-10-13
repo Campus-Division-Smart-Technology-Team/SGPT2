@@ -100,22 +100,32 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
                 logging.error(
                     f"✗ Error fetching operational date: {e}", exc_info=True)
 
-        # Fallback to metadata if full search didn't work
+        # **FIXED: Fallback to metadata - check inside metadata dict**
         if not operational_date:
             # Try last_modified from metadata
-            operational_date = top_operational.get('last_modified')
+            metadata = top_operational.get('metadata', {})
+            operational_date = metadata.get('last_modified')
             if operational_date:
                 logging.info(
                     f"Using last_modified from operational doc metadata: {operational_date}")
             else:
+                # Try other date fields in metadata
+                for date_field in ['review_date', 'updated', 'revised', 'date', 'document_date']:
+                    operational_date = metadata.get(date_field)
+                    if operational_date and operational_date != "publication date unknown":
+                        logging.info(
+                            f"Using {date_field} from metadata: {operational_date}")
+                        break
+
                 # Try to extract from text as last resort
-                text = top_operational.get('text', '')
-                from date_utils import extract_date_from_single_result
-                operational_date = extract_date_from_single_result(
-                    top_operational)
-                if operational_date:
-                    logging.info(
-                        f"Extracted date from operational doc text: {operational_date}")
+                if not operational_date:
+                    text = top_operational.get('text', '')
+                    from date_utils import extract_date_from_single_result
+                    operational_date = extract_date_from_single_result(
+                        top_operational)
+                    if operational_date:
+                        logging.info(
+                            f"Extracted date from operational doc text: {operational_date}")
 
     return planon_date, operational_date, operational_doc_key
 
@@ -263,10 +273,19 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
                                      all_results: List[Dict[str, Any]]) -> Tuple[str, str]:
     """
     Generate an answer that includes separate date information for Planon and operational docs.
-    ALWAYS uses the highest-scoring operational document for the "document last updated" date.
-
-    Returns: (answer, publication_date_info)
     """
+    # DEBUG: Log top result structure
+    logging.info("=" * 60)
+    logging.info("TOP RESULT DEBUG:")
+    logging.info(f"Key: {top_result.get('key')}")
+    logging.info(f"Document type: {top_result.get('document_type')}")
+    logging.info(f"Building: {top_result.get('building_name')}")
+    logging.info(
+        f"Metadata keys: {list(top_result.get('metadata', {}).keys())}")
+    logging.info(
+        f"Has 'last_modified' in metadata: {'last_modified' in top_result.get('metadata', {})}")
+    logging.info("=" * 60)
+    # Get building name from top result
     building_name = top_result.get("building_name", "Unknown")
 
     # Get dates by document type - prioritizing highest-scoring operational doc
