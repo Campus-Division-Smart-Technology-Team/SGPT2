@@ -55,6 +55,9 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
     operational_results = sorted(
         operational_results, key=lambda x: x.get('score', 0), reverse=True)
 
+    logging.info(
+        f"Found {len(operational_results)} operational docs and {len(planon_results)} planon records")
+
     # Get Planon date ONLY from property condition assessment
     if planon_results:
         for result in planon_results:
@@ -62,18 +65,8 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
             extracted_date = extract_planon_date_from_text(text)
             if extracted_date:
                 planon_date = extracted_date
-                logging.info(f"Found Planon assessment date: {planon_date}")
+                logging.info(f"✓ Found Planon assessment date: {planon_date}")
                 break
-
-        # Fallback to last_modified if available
-        if not planon_date:
-            for result in planon_results:
-                last_mod = result.get('last_modified')
-                if last_mod:
-                    planon_date = last_mod
-                    logging.info(
-                        f"Using last_modified from Planon data: {planon_date}")
-                    break
 
     # Get operational document date from HIGHEST-SCORING operational doc
     if operational_results:
@@ -89,23 +82,40 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
         if key_value and idx_name:
             try:
                 idx = open_index(idx_name)
+                namespace = top_operational.get("namespace", DEFAULT_NAMESPACE)
+                logging.info(
+                    f"Searching for dates in index={idx_name}, namespace={namespace}, key={key_value}")
+
                 latest_date, _ = search_source_for_latest_date(
-                    idx, key_value, top_operational.get(
-                        "namespace", DEFAULT_NAMESPACE)
+                    idx, key_value, namespace
                 )
                 if latest_date:
                     operational_date = latest_date
                     logging.info(
-                        f"Found operational doc date from {key_value}: {operational_date}")
+                        f"✓ Found operational doc date from {key_value}: {operational_date}")
+                else:
+                    logging.warning(
+                        f"✗ No date found in search_source_for_latest_date for {key_value}")
             except Exception as e:
-                logging.error(f"Error fetching operational date: {e}")
+                logging.error(
+                    f"✗ Error fetching operational date: {e}", exc_info=True)
 
-        # Fallback to last_modified from operational doc
+        # Fallback to metadata if full search didn't work
         if not operational_date:
+            # Try last_modified from metadata
             operational_date = top_operational.get('last_modified')
             if operational_date:
                 logging.info(
-                    f"Using last_modified from operational doc: {operational_date}")
+                    f"Using last_modified from operational doc metadata: {operational_date}")
+            else:
+                # Try to extract from text as last resort
+                text = top_operational.get('text', '')
+                from date_utils import extract_date_from_single_result
+                operational_date = extract_date_from_single_result(
+                    top_operational)
+                if operational_date:
+                    logging.info(
+                        f"Extracted date from operational doc text: {operational_date}")
 
     return planon_date, operational_date, operational_doc_key
 

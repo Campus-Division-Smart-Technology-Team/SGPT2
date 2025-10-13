@@ -278,19 +278,26 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
 
     elif top_hits:
         # If LLM answer generation is disabled, still try to get date info
-        top_result = top_hits[0]
-        key_value = top_result.get("key", "")
-        if key_value and top_result.get("index"):
-            idx = open_index(top_result.get("index"))
-            latest_date, _ = search_source_for_latest_date(
-                idx, key_value, top_result.get("namespace", DEFAULT_NAMESPACE)
-            )
-            if latest_date:
-                parsed = parse_date_string(latest_date)
-                display_date = format_display_date(parsed)
-                publication_date_info = f"📅 Top result document last updated: **{display_date}**"
-            else:
-                publication_date_info = f"📅 **Publication date unknown** for top result"
+        # Find the highest-scoring operational doc
+        operational_docs = [r for r in top_hits if r.get(
+            'document_type') == 'operational_doc']
+
+        if operational_docs:
+            top_operational = operational_docs[0]  # Already sorted by score
+            key_value = top_operational.get("key", "")
+
+            if key_value and top_operational.get("index"):
+                idx = open_index(top_operational.get("index"))
+                latest_date, _ = search_source_for_latest_date(
+                    idx, key_value, top_operational.get(
+                        "namespace", DEFAULT_NAMESPACE)
+                )
+                if latest_date:
+                    parsed = parse_date_string(latest_date)
+                    display_date = format_display_date(parsed)
+                    publication_date_info = f"📅 Top operational document last updated: **{display_date}**"
+                else:
+                    publication_date_info = f"📅 **Publication date unknown** for top operational document"
 
     return top_hits, answer, publication_date_info, score_too_low
 

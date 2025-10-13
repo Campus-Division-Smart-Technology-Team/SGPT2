@@ -65,17 +65,15 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
         Optional[str], List[Dict[str, Any]]]:
     """
     Search for all chunks/documents with the same key and determine the latest publication/review date
-    by reading through all the document text chunks.
-
-    This function groups all chunks by the document key and searches through all of them to find
-    the most reliable date information.
-
-    Returns:
-        Tuple of (latest_date_string, all_matching_documents)
     """
     try:
+        logging.info(f"=" * 60)
+        logging.info(f"SEARCHING FOR DATE:")
         logging.info(
-            f"Searching for all chunks with key='{key_value}' in namespace='{namespace}'")
+            f"  Index: {idx._index_name if hasattr(idx, '_index_name') else 'unknown'}")
+        logging.info(f"  Namespace: {namespace}")
+        logging.info(f"  Key: {key_value}")
+        logging.info(f"=" * 60)
 
         # Strategy 1: Try metadata filtering to get all chunks from this document
         matching_docs = []
