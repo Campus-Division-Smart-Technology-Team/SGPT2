@@ -46,9 +46,6 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
                      building_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Query a single index across its namespaces with optional building filter.
-
-    NOTE: We don't use Pinecone metadata filters here because they're too strict.
-    Instead, we do post-filtering on results to match building names flexibly.
     """
     idx = open_index(idx_name)
     hits: List[Dict[str, Any]] = []
@@ -91,9 +88,7 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
 def matches_building(result_building_name: str, target_building: str) -> bool:
     """
     Check if a result's building name matches the target building.
-    Uses flexible matching to handle variations like:
-    - "Senate House" matches "Senate House BMS Controls Basement Panel"
-    - "Senate House" matches "Planon Data - Senate House"
+    Uses flexible matching to handle variations.
     """
     if not result_building_name or not target_building:
         return False
@@ -105,19 +100,18 @@ def matches_building(result_building_name: str, target_building: str) -> bool:
     if result_lower == target_lower:
         return True
 
-    # Target is contained in result (e.g., "Senate House" in "Senate House BMS Controls")
+    # Target is contained in result
     if target_lower in result_lower:
         return True
 
-    # Result is contained in target (less common but possible)
+    # Result is contained in target
     if result_lower in target_lower:
         return True
 
-    # Check if they share significant words (at least 2 words in common)
+    # Check if they share significant words
     target_words = set(target_lower.split())
     result_words = set(result_lower.split())
 
-    # Remove common stop words
     stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
                   'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'bms',
                   'building', 'house', 'data', 'planon'}
@@ -127,11 +121,9 @@ def matches_building(result_building_name: str, target_building: str) -> bool:
 
     common_words = target_words & result_words
 
-    # If at least 2 significant words match, consider it a match
     if len(common_words) >= 2:
         return True
 
-    # If both have only 1 significant word and they match, that's a match
     if len(target_words) >= 1 and len(result_words) >= 1 and common_words:
         return True
 
@@ -140,10 +132,7 @@ def matches_building(result_building_name: str, target_building: str) -> bool:
 
 def filter_results_by_building(results: List[Dict[str, Any]],
                                target_building: str) -> List[Dict[str, Any]]:
-    """
-    Filter results to only those matching the target building.
-    Uses flexible matching to catch variations in building names.
-    """
+    """Filter results to only those matching the target building."""
     filtered = []
 
     for result in results:
@@ -170,18 +159,16 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
 
     all_hits: List[Dict[str, Any]] = []
 
-    # Search across all target indexes - NO FILTERS, just semantic search
-    # We'll filter results AFTER getting them
+    # Search across all target indexes
     for idx_name in TARGET_INDEXES:
         # If we have a target building, enhance the query
         if target_building:
-            # Search with building name included for better relevance
             enhanced_query = f"{query} {target_building}"
             building_hits = search_one_index(
                 idx_name, enhanced_query, top_k * 2, embed_model=None)
             all_hits.extend(building_hits)
 
-        # Also do a standard search to catch anything we might have missed
+        # Also do a standard search
         general_hits = search_one_index(
             idx_name, query, top_k, embed_model=None)
         all_hits.extend(general_hits)
@@ -197,25 +184,44 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
 
     logging.info(f"Total unique hits before filtering: {len(unique_hits)}")
 
+    # DEBUG: Log document types found
+    doc_type_counts = {}
+    for hit in unique_hits:
+        doc_type = hit.get('document_type', 'unknown')
+        doc_type_counts[doc_type] = doc_type_counts.get(doc_type, 0) + 1
+    logging.info(f"Document types found: {doc_type_counts}")
+
+    # DEBUG: Log top 5 results before filtering
+    logging.info("Top 5 results before filtering:")
+    for i, hit in enumerate(unique_hits[:5]):
+        logging.info(
+            f"  {i+1}. building_name='{hit.get('building_name')}', doc_type='{hit.get('document_type')}', score={hit.get('score', 0):.3f}, key='{hit.get('key', '')[:50]}'")
+
     # If we have a target building, filter and prioritize
     if target_building:
-        # Filter to only results matching the building
         building_specific_hits = filter_results_by_building(
             unique_hits, target_building)
 
         logging.info(
             f"Hits matching '{target_building}': {len(building_specific_hits)}")
 
-        # Log what we found
-        for hit in building_specific_hits[:3]:
-            logging.info(
-                f"  - {hit.get('building_name')} (score: {hit.get('score', 0):.3f}, type: {hit.get('document_type')})")
+        # DEBUG: Log document types in filtered results
+        filtered_doc_type_counts = {}
+        for hit in building_specific_hits:
+            doc_type = hit.get('document_type', 'unknown')
+            filtered_doc_type_counts[doc_type] = filtered_doc_type_counts.get(
+                doc_type, 0) + 1
+        logging.info(f"Filtered document types: {filtered_doc_type_counts}")
 
-        # If we found building-specific results, use only those
+        # Log what we found
+        logging.info("Top results after filtering:")
+        for i, hit in enumerate(building_specific_hits[:5]):
+            logging.info(
+                f"  {i+1}. building_name='{hit.get('building_name')}', doc_type='{hit.get('document_type')}', score={hit.get('score', 0):.3f}")
+
         if building_specific_hits:
             unique_hits = building_specific_hits
         else:
-            # If no exact matches, keep all results but prioritize by building
             logging.warning(
                 f"No exact matches for '{target_building}', using all results")
             unique_hits = prioritize_building_results(
@@ -224,6 +230,12 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
     # Get top K results by score
     top_hits = nlargest(min(top_k, len(unique_hits)),
                         unique_hits, key=lambda m: (m.get("score") or 0))
+
+    # DEBUG: Log final top results
+    logging.info(f"Final top {len(top_hits)} results:")
+    for i, hit in enumerate(top_hits):
+        logging.info(
+            f"  {i+1}. building_name='{hit.get('building_name')}', doc_type='{hit.get('document_type')}', score={hit.get('score', 0):.3f}, key='{hit.get('key', '')[:50]}'")
 
     answer = ""
     publication_date_info = ""
@@ -261,7 +273,6 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
         # Add building summary if multiple buildings found and not targeting specific building
         if len(building_groups) > 1 and not target_building:
             answer += f"\n\n**Note:** Results found across multiple buildings:\n"
-            # Show top 3
             for building, results in list(building_groups.items())[:3]:
                 answer += f"\n- **{building}**: {len(results)} result(s)"
 
@@ -287,13 +298,6 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
 def search_by_building(building_name: str, top_k: int = 10) -> List[Dict[str, Any]]:
     """
     Search specifically for all documents related to a building.
-
-    Args:
-        building_name: Name of the building
-        top_k: Number of results per index
-
-    Returns:
-        List of all results for the building
     """
     all_results = []
 
@@ -301,7 +305,7 @@ def search_by_building(building_name: str, top_k: int = 10) -> List[Dict[str, An
         results = search_one_index(
             idx_name,
             f"building information for {building_name}",
-            top_k * 2,  # Get more results initially
+            top_k * 2,
             embed_model=None
         )
         all_results.extend(results)
