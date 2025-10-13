@@ -20,7 +20,7 @@ def extract_planon_date_from_text(text: str) -> Optional[str]:
     """
     patterns = [
         r'Property condition assessment date[:\s]+([0-9]{2}\s+[A-Za-z]+\s+[0-9]{4})',
-        r'condition assessment[:\s]+([0-9]{2}\s+[A-Za-z]+\s+[0-9]{4})',
+        r'condition assessment date[:\s]+([0-9]{2}\s+[A-Za-z]+\s+[0-9]{4})',
         r'assessment date[:\s]+([0-9]{2}\s+[A-Za-z]+\s+[0-9]{4})',
     ]
 
@@ -33,15 +33,16 @@ def extract_planon_date_from_text(text: str) -> Optional[str]:
 
 
 def get_document_dates_by_type(results: List[Dict[str, Any]],
-                               target_building: str) -> Tuple[Optional[str], Optional[str]]:
+                               target_building: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Get separate dates for Planon data and operational documents.
 
     Returns:
-        (planon_date, operational_date)
+        (planon_date, operational_date, operational_doc_key)
     """
     planon_date = None
     operational_date = None
+    operational_doc_key = None
 
     # Separate results by type
     planon_results = [r for r in results if r.get(
@@ -67,10 +68,12 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
                     planon_date = last_mod
                     break
 
-    # Get operational document date
+    # Get operational document date - ALWAYS from operational docs, never from Planon
     if operational_results:
+        # Get the highest-scoring operational document
         top_operational = operational_results[0]
         key_value = top_operational.get("key", "")
+        operational_doc_key = key_value
         idx_name = top_operational.get("index", "")
 
         if key_value and idx_name:
@@ -83,23 +86,30 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
                 if latest_date:
                     operational_date = latest_date
                     logging.info(
-                        f"Found operational doc date: {operational_date}")
+                        f"Found operational doc date from {key_value}: {operational_date}")
             except Exception as e:
                 logging.error(f"Error fetching operational date: {e}")
 
-        # Fallback to last_modified
+        # Fallback to last_modified from operational doc
         if not operational_date:
             operational_date = top_operational.get('last_modified')
+            if operational_date:
+                logging.info(
+                    f"Using last_modified from operational doc: {operational_date}")
 
-    return planon_date, operational_date
+    return planon_date, operational_date, operational_doc_key
 
 
 def format_date_information(planon_date: Optional[str],
                             operational_date: Optional[str],
-                            planon_doc_key: Optional[str] = None,
                             operational_doc_key: Optional[str] = None) -> Tuple[str, str]:
     """
     Format date information for display and context.
+
+    Args:
+        planon_date: Property condition assessment date
+        operational_date: Operational document date
+        operational_doc_key: Key/filename of operational document
 
     Returns:
         (date_context_for_llm, publication_info_for_display)
@@ -112,31 +122,41 @@ def format_date_information(planon_date: Optional[str],
         parsed = parse_date_string(planon_date)
         display_date = format_display_date(parsed)
         context_parts.append(
-            f"Property/Planon data is current as of: {display_date} (property condition assessment date)")
+            f"Property/Planon data (building characteristics, facilities, condition): Property condition assessment date is {display_date}")
         display_parts.append(
             f"📊 **Planon property data**: as of **{display_date}** (property condition assessment)")
-    else:
-        context_parts.append("Property/Planon data date: not available")
-        display_parts.append(f"📊 **Planon property data**: date unknown")
 
     # Format operational document date
-    if operational_date:
+    if operational_date and operational_doc_key:
         parsed = parse_date_string(operational_date)
         display_date = format_display_date(parsed)
-        doc_name = operational_doc_key or "operational document"
-        context_parts.append(
-            f"BMS/Operational documentation last updated: {display_date}")
-        display_parts.append(
-            f"📄 **BMS/Operational documentation** ({doc_name}): last updated **{display_date}**")
-    else:
-        if operational_doc_key:
-            context_parts.append(
-                f"BMS/Operational documentation ({operational_doc_key}): date not available")
-            display_parts.append(
-                f"📄 **BMS/Operational documentation** ({operational_doc_key}): date unknown")
 
-    date_context = "\n".join(context_parts)
-    publication_info = "\n".join(display_parts)
+        # Clean up the document key for display (remove path and .pdf)
+        doc_display = operational_doc_key.replace(
+            'UoB-', '').replace('.pdf', '').replace('-', ' ')
+
+        context_parts.append(
+            f"BMS/Operational documentation (technical systems, controls, procedures): Document '{operational_doc_key}' last updated {display_date}")
+        display_parts.append(
+            f"📄 **BMS/Operational documentation** ({doc_display}): last updated **{display_date}**")
+    elif operational_doc_key:
+        # We have the doc but no date
+        doc_display = operational_doc_key.replace(
+            'UoB-', '').replace('.pdf', '').replace('-', ' ')
+        context_parts.append(
+            f"BMS/Operational documentation (technical systems, controls, procedures): Document '{operational_doc_key}' (date not available)")
+        display_parts.append(
+            f"📄 **BMS/Operational documentation** ({doc_display}): date unknown")
+
+    # Build the final strings
+    if context_parts:
+        date_context = "Document Date Information:\n" + \
+            "\n".join(f"- {part}" for part in context_parts)
+    else:
+        date_context = "Document Date Information: Not available"
+
+    publication_info = "\n".join(
+        display_parts) if display_parts else "📅 **Date information unavailable**"
 
     return date_context, publication_info
 
@@ -222,33 +242,31 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
                                      all_results: List[Dict[str, Any]]) -> Tuple[str, str]:
     """
     Generate an answer that includes separate date information for Planon and operational docs.
+    Always uses operational document for the "document last updated" even if Planon ranks higher.
 
     Returns: (answer, publication_date_info)
     """
     building_name = top_result.get("building_name", "Unknown")
 
     # Get dates by document type
-    planon_date, operational_date = get_document_dates_by_type(
+    planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
         all_results, building_name)
-
-    # Get document keys for reference
-    planon_results = [r for r in all_results if r.get(
-        'document_type') == 'planon_data']
-    operational_results = [r for r in all_results if r.get(
-        'document_type') == 'operational_doc']
-
-    planon_doc_key = planon_results[0].get('key') if planon_results else None
-    operational_doc_key = operational_results[0].get(
-        'key') if operational_results else None
 
     # Format date information
     date_context, publication_info = format_date_information(
-        planon_date, operational_date, planon_doc_key, operational_doc_key
+        planon_date, operational_date, operational_doc_key
     )
 
     # Build context with building prioritization
     snippets = [r.get("text", "") for r in all_results if r.get("text")]
     context = build_context(snippets, prioritize_building=True)
+
+    # Determine what type of question this is
+    question_lower = question.lower()
+    is_bms_query = any(term in question_lower for term in [
+                       'bms', 'building management', 'controls', 'hvac', 'system', 'frost', 'temperature', 'monitoring'])
+    is_property_query = any(term in question_lower for term in [
+                            'area', 'size', 'condition', 'rating', 'manager', 'facilities', 'campus', 'location'])
 
     prompt = f"""Your name is Alfred, a helpful assistant at the University of Bristol working in the Smart Technology team.
 
@@ -256,16 +274,18 @@ Answer the user's question using ONLY the context below. If the answer cannot be
 
 IMPORTANT: 
 - The context includes both property/Planon data AND BMS/operational documentation
-- Property data comes from building assessments
-- BMS/operational data comes from system documentation
-- Always end your response with information about document dates
-- Be clear about which information comes from which source type
+- Property/Planon data provides: building characteristics, location, size, facilities manager, condition ratings, fire ratings
+- BMS/operational documentation provides: technical system details, control sequences, equipment specifications, operating procedures
+- When answering about BMS/technical systems, prioritize the operational documentation
+- When answering about building properties/characteristics, prioritize the property data
+- Always end your response with information about the relevant document dates
+- The property condition assessment date tells when the building condition was last assessed
+- The BMS/operational document date tells when the technical documentation was last updated
 
 Question: {question}
 
 Context: {context}
 
-Document Date Information:
 {date_context}
 
 Building: {building_name}
@@ -277,7 +297,7 @@ Top Result Score: {top_result.get('score', 'Unknown'):.3f}
             model=ANSWER_MODEL,
             messages=[
                 {"role": "system",
-                 "content": "You are Alfred, a helpful assistant at the University of Bristol. Always distinguish between property/Planon data and BMS/operational documentation in your responses. Include separate date information for each type of document."},
+                 "content": "You are Alfred, a helpful assistant at the University of Bristol. Always distinguish between property/Planon data (building characteristics) and BMS/operational documentation (technical systems). Include appropriate date information based on what the user is asking about. For BMS questions, emphasize the operational documentation date. For property questions, emphasize the assessment date."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.2
@@ -311,17 +331,12 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
         'document_type') == 'operational_doc']
 
     # Get dates by type
-    planon_date, operational_date = get_document_dates_by_type(
+    planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
         target_results, target_building)
-
-    # Get document keys
-    planon_doc_key = property_data[0].get('key') if property_data else None
-    operational_doc_key = operational_docs[0].get(
-        'key') if operational_docs else None
 
     # Format date information
     date_context, publication_info = format_date_information(
-        planon_date, operational_date, planon_doc_key, operational_doc_key
+        planon_date, operational_date, operational_doc_key
     )
 
     # Build grouped context
@@ -344,10 +359,10 @@ Answer the user's question about **{target_building}** using ONLY the context be
 IMPORTANT: 
 - Focus your answer specifically on {target_building}
 - Clearly distinguish between property/Planon data and BMS/operational documentation
-- Property data provides building characteristics, conditions, and facilities information
-- BMS/operational data provides technical system details and operating procedures
-- Always mention the relevant dates for each type of information
-- End with clear date information for both data types
+- Property/Planon data provides building characteristics, conditions, and facilities information
+- BMS/operational documentation provides technical system details and operating procedures
+- Always mention the relevant dates for the information you're providing
+- End with clear date information
 
 Question: {question}
 
@@ -355,7 +370,6 @@ Building: {target_building}
 
 Context: {context}
 
-Document Date Information:
 {date_context}
 """
 
@@ -364,7 +378,7 @@ Document Date Information:
             model=ANSWER_MODEL,
             messages=[
                 {"role": "system",
-                 "content": f"You are Alfred, a helpful assistant. You are answering specifically about {target_building}. Always distinguish between property/Planon data (building information, conditions, facilities) and BMS/operational documentation (technical systems, controls). Include separate dates for each type."},
+                 "content": f"You are Alfred, a helpful assistant. You are answering specifically about {target_building}. Always distinguish between property/Planon data (building information, conditions, facilities) and BMS/operational documentation (technical systems, controls). Include appropriate date information based on the question type."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.2
