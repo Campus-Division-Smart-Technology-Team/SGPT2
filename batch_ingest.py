@@ -32,6 +32,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not PINECONE_API_KEY:
@@ -59,6 +61,8 @@ EXT_WHITELIST = {"txt", "md", "csv", "json", "pdf", "docx"}
 # ---------------- Clients ----------------
 s3 = boto3.client(
     "s3",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     config=BotoConfig(
         connect_timeout=5,
         read_timeout=60,
