@@ -20,7 +20,7 @@ def parse_date_string(date_str: str) -> datetime:
 
     # Common date formats to try (including dot format and UK format)
     formats = [
-        "%d %B %Y",  # 03 November 2021
+        "%d %B %Y",  # 19 March 2020
         "%d.%m.%Y",  # 12.06.2025 (dot format)
         "%Y.%m.%d",  # 2025.06.12 (dot format)
         "%Y-%m-%d",  # 2025-07-28
@@ -64,7 +64,15 @@ def format_display_date(date_obj: datetime) -> str:
 def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_NAMESPACE) -> Tuple[
         Optional[str], List[Dict[str, Any]]]:
     """
-    Search for all chunks/documents with the same key and determine the latest publication/review date
+    Search for all chunks/documents with the same key and determine the latest publication/review date.
+
+    Args:
+        idx: Pinecone index object
+        key_value: The document key to search for (e.g., "UoB-Senate-House-BMS-Controls-Basement-Panel.pdf")
+        namespace: Pinecone namespace
+
+    Returns:
+        (latest_date_str, matching_documents)
     """
     try:
         logging.info(f"=" * 60)
@@ -125,7 +133,6 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
         all_dates = []
 
         # Enhanced date patterns with priority weighting
-        # Higher priority = more reliable date source
         date_patterns = [
             # Most reliable: explicitly labeled dates in common document formats
             (r'(?:Last\s+Updated|Last\s+Revised|Date\s+Updated|Date\s+Revised)[:\s]+([0-3]?[0-9][\s/.-][A-Za-z]+[\s/.-][0-9]{4})', 'labeled_updated', 15),
@@ -141,9 +148,12 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
             (r'\b([0-3]?[0-9]\.[0-1]?[0-9]\.[0-9]{4})\b', 'dot_dmy', 8),
             (r'\b([0-9]{4}\.[0-1]?[0-9]\.[0-3]?[0-9])\b', 'dot_ymd', 8),
 
-            # Standard text dates
+            # Standard text dates with full month names
+            # "19 March 2020"
+            (r'\b([0-3]?[0-9][\s][A-Z][a-z]+[\s][0-9]{4})\b',
+             'standard_text', 10),
             (r'\b([0-3]?[0-9][\s/][A-Za-z]{3,9}[\s/][0-9]{4})\b',
-             'standard_text', 7),
+             'standard_text_slash', 7),
             (r'\b([0-3]?[0-9][\s][A-Z][a-z]{2}[\s][0-9]{4})\b',
              'abbreviated_text', 7),
 
@@ -167,8 +177,8 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
             chunk_num = doc.get("chunk", "?")
 
             # First, check metadata fields (highest reliability)
-            # Skip publication_date as it's known to be unreliable
-            for date_field in ["last_modified", "review_date", "updated", "revised", "date", "document_date"]:
+            # Skip last_modified and publication_date as they're unreliable
+            for date_field in ["review_date", "updated", "revised", "date", "document_date"]:
                 if date_field in metadata:
                     date_val = metadata[date_field]
                     if date_val and date_val != "publication date unknown":
@@ -253,8 +263,8 @@ def extract_date_from_single_result(result: Dict[str, Any]) -> Optional[str]:
         metadata = result.get("metadata", {})
         text = result.get("text", "")
 
-        # Check metadata first
-        for date_field in ["last_modified", "review_date", "updated", "revised", "date"]:
+        # Check metadata first (skip last_modified and publication_date)
+        for date_field in ["review_date", "updated", "revised", "date", "document_date"]:
             if date_field in metadata:
                 date_val = metadata[date_field]
                 if date_val and date_val != "publication date unknown":
@@ -262,10 +272,11 @@ def extract_date_from_single_result(result: Dict[str, Any]) -> Optional[str]:
                     if parsed != datetime.min:
                         return str(date_val)
 
-        # Quick text search for labeled dates
+        # Quick text search for labeled dates and common formats
         patterns = [
             r'(?:Last\s+Updated|Last\s+Revised|Updated|Revised)[:\s]+([0-3]?[0-9][\s/.-][A-Za-z]+[\s/.-][0-9]{4})',
             r'(?:Last\s+Updated|Last\s+Revised|Updated|Revised)[:\s]+([0-3]?[0-9][\s/.-][0-3]?[0-9][\s/.-][0-9]{4})',
+            r'\b([0-3]?[0-9][\s][A-Z][a-z]+[\s][0-9]{4})\b',  # "19 March 2020"
         ]
 
         for pattern in patterns:
