@@ -18,12 +18,12 @@ def parse_date_string(date_str: str) -> datetime:
     if not date_str or date_str == "publication date unknown":
         return datetime.min
 
-    # Common date formats to try (including dot format)
+    # Common date formats to try (including dot format and UK format)
     formats = [
+        "%d %B %Y",  # 03 November 2021
         "%d.%m.%Y",  # 12.06.2025 (dot format)
         "%Y.%m.%d",  # 2025.06.12 (dot format)
         "%Y-%m-%d",  # 2025-07-28
-        "%d %B %Y",  # 28 July 2025
         "%B %d, %Y",  # July 28, 2025
         "%d/%m/%Y",  # 28/07/2025
         "%m/%d/%Y",  # 07/28/2025
@@ -45,6 +45,9 @@ def parse_date_string(date_str: str) -> datetime:
 
 def format_display_date(date_obj: datetime) -> str:
     """Format datetime object for display."""
+    if date_obj == datetime.min:
+        return "Unknown"
+
     if date_obj.day == 1 and date_obj.month == 1:
         # Year only
         return date_obj.strftime("%Y")
@@ -57,7 +60,7 @@ def format_display_date(date_obj: datetime) -> str:
 
 
 def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_NAMESPACE) -> Tuple[
-    Optional[str], List[Dict[str, Any]]]:
+        Optional[str], List[Dict[str, Any]]]:
     """
     Search for all documents from the same key and determine the latest publication/review date.
 
@@ -70,10 +73,12 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
 
         # Try to get many results to find all documents from this source
         try:
-            raw = try_inference_search(idx, namespace, source_query, k=20, model_name=None)
+            raw = try_inference_search(
+                idx, namespace, source_query, k=20, model_name=None)
         except:
             # Fallback to vector search
-            raw = vector_query(idx, namespace, source_query, 20, DEFAULT_EMBED_MODEL)
+            raw = vector_query(idx, namespace, source_query,
+                               20, DEFAULT_EMBED_MODEL)
 
         results = normalize_matches(raw)
 
@@ -112,7 +117,8 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
                     if date_val and date_val != "publication date unknown":
                         parsed = parse_date_string(str(date_val))
                         if parsed != datetime.min:
-                            all_dates.append((parsed, str(date_val), doc.get("id")))
+                            all_dates.append(
+                                (parsed, str(date_val), doc.get("id")))
 
             # Check text content with context-aware patterns
             for pattern, pattern_type in date_patterns:
