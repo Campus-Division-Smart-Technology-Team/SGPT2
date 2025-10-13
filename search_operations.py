@@ -7,6 +7,7 @@ Federated search operations across multiple Pinecone indexes with building-aware
 from typing import Dict, List, Optional, Any, Tuple
 from heapq import nlargest
 import streamlit as st
+import logging
 
 from config import (
     TARGET_INDEXES, SEARCH_ALL_NAMESPACES, DEFAULT_NAMESPACE,
@@ -34,20 +35,20 @@ def _namespaces_to_search(idx):
         return [DEFAULT_NAMESPACE]
 
 
+def embed_texts(texts: List[str], model: str) -> List[List[float]]:
+    """Generate embeddings for texts (helper for vector search with filters)."""
+    from clients import oai
+    res = oai.embeddings.create(model=model, input=texts)
+    return [d.embedding for d in res.data]
+
+
 def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional[str],
                      building_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Query a single index across its namespaces with optional building filter.
 
-    Args:
-        idx_name: Name of the Pinecone index
-        question: Search query
-        k: Number of results to return
-        embed_model: Embedding model to use
-        building_filter: Optional building name to filter results
-
-    Returns:
-        List of search results with metadata
+    NOTE: We don't use Pinecone metadata filters here because they're too strict.
+    Instead, we do post-filtering on results to match building names flexibly.
     """
     idx = open_index(idx_name)
     hits: List[Dict[str, Any]] = []
@@ -57,21 +58,7 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
 
     for ns in namespaces:
         try:
-            # Build Pinecone metadata filter if building is specified
-            metadata_filter = None
-            if building_filter:
-                # Create a filter that matches building_name
-                metadata_filter = {
-                    "$or": [
-                        {"building_name": {"$eq": building_filter}},
-                        # Case-insensitive partial match
-                        {"building_name": {
-                            "$regex": f"(?i){building_filter}"}},
-                    ]
-                }
-
             if force_inference:
-                # Note: Pinecone inference search may not support filters in all cases
                 raw = try_inference_search(
                     idx, ns, question, k, model_name=SPECIAL_INFERENCE_MODEL)
                 mode_used = "server-side (inference)"
@@ -82,27 +69,11 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
                     mode_used = "server-side (inference)"
                 except Exception:
                     from config import DEFAULT_EMBED_MODEL
-                    # Vector query supports metadata filters
-                    if metadata_filter:
-                        raw = idx.query(
-                            vector=embed_texts(
-                                [question], embed_model or DEFAULT_EMBED_MODEL)[0],
-                            top_k=k,
-                            namespace=ns,
-                            filter=metadata_filter,
-                            include_metadata=True
-                        )
-                    else:
-                        raw = vector_query(
-                            idx, ns, question, k, embed_model or DEFAULT_EMBED_MODEL)
+                    raw = vector_query(idx, ns, question, k,
+                                       embed_model or DEFAULT_EMBED_MODEL)
                     mode_used = "client-side (vector)"
 
             norm = normalize_matches(raw)
-
-            # Post-filter results if inference search was used (can't use metadata filters)
-            if building_filter and force_inference:
-                norm = [m for m in norm if building_filter.lower() in m.get(
-                    'building_name', '').lower()]
 
             for m in norm:
                 m["index"] = idx_name
@@ -111,19 +82,76 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
             hits.extend(norm)
 
         except Exception as e:
-            # non-fatal per-namespace failure
-            import logging
             logging.warning(f"Search failed for {idx_name}/{ns}: {e}")
             continue
 
     return hits
 
 
-def embed_texts(texts: List[str], model: str) -> List[List[float]]:
-    """Generate embeddings for texts (helper for vector search with filters)."""
-    from clients import oai
-    res = oai.embeddings.create(model=model, input=texts)
-    return [d.embedding for d in res.data]
+def matches_building(result_building_name: str, target_building: str) -> bool:
+    """
+    Check if a result's building name matches the target building.
+    Uses flexible matching to handle variations like:
+    - "Senate House" matches "Senate House BMS Controls Basement Panel"
+    - "Senate House" matches "Planon Data - Senate House"
+    """
+    if not result_building_name or not target_building:
+        return False
+
+    result_lower = result_building_name.lower().strip()
+    target_lower = target_building.lower().strip()
+
+    # Exact match
+    if result_lower == target_lower:
+        return True
+
+    # Target is contained in result (e.g., "Senate House" in "Senate House BMS Controls")
+    if target_lower in result_lower:
+        return True
+
+    # Result is contained in target (less common but possible)
+    if result_lower in target_lower:
+        return True
+
+    # Check if they share significant words (at least 2 words in common)
+    target_words = set(target_lower.split())
+    result_words = set(result_lower.split())
+
+    # Remove common stop words
+    stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                  'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'bms',
+                  'building', 'house', 'data', 'planon'}
+
+    target_words = target_words - stop_words
+    result_words = result_words - stop_words
+
+    common_words = target_words & result_words
+
+    # If at least 2 significant words match, consider it a match
+    if len(common_words) >= 2:
+        return True
+
+    # If both have only 1 significant word and they match, that's a match
+    if len(target_words) >= 1 and len(result_words) >= 1 and common_words:
+        return True
+
+    return False
+
+
+def filter_results_by_building(results: List[Dict[str, Any]],
+                               target_building: str) -> List[Dict[str, Any]]:
+    """
+    Filter results to only those matching the target building.
+    Uses flexible matching to catch variations in building names.
+    """
+    filtered = []
+
+    for result in results:
+        building_name = result.get('building_name', '')
+        if matches_building(building_name, target_building):
+            filtered.append(result)
+
+    return filtered
 
 
 def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any]], str, str, bool]:
@@ -136,20 +164,24 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
     target_building = extract_building_from_query(query)
 
     if target_building:
+        logging.info(f"🏢 Detected building: {target_building}")
         st.info(
-            f"🏢 Detected building: **{target_building}** - prioritizing results for this building")
+            f"🏢 Detected building: **{target_building}** - searching for all related documents")
 
     all_hits: List[Dict[str, Any]] = []
 
-    # Search across all target indexes
+    # Search across all target indexes - NO FILTERS, just semantic search
+    # We'll filter results AFTER getting them
     for idx_name in TARGET_INDEXES:
-        # First search: try with building filter if we detected one
+        # If we have a target building, enhance the query
         if target_building:
-            building_hits = search_one_index(idx_name, query, top_k, embed_model=None,
-                                             building_filter=target_building)
+            # Search with building name included for better relevance
+            enhanced_query = f"{query} {target_building}"
+            building_hits = search_one_index(
+                idx_name, enhanced_query, top_k * 2, embed_model=None)
             all_hits.extend(building_hits)
 
-        # Second search: general search without filter (get more results)
+        # Also do a standard search to catch anything we might have missed
         general_hits = search_one_index(
             idx_name, query, top_k, embed_model=None)
         all_hits.extend(general_hits)
@@ -163,13 +195,35 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
             seen_ids.add(hit_id)
             unique_hits.append(hit)
 
-    # Prioritize results from target building if specified
+    logging.info(f"Total unique hits before filtering: {len(unique_hits)}")
+
+    # If we have a target building, filter and prioritize
     if target_building:
-        unique_hits = prioritize_building_results(unique_hits, target_building)
+        # Filter to only results matching the building
+        building_specific_hits = filter_results_by_building(
+            unique_hits, target_building)
+
+        logging.info(
+            f"Hits matching '{target_building}': {len(building_specific_hits)}")
+
+        # Log what we found
+        for hit in building_specific_hits[:3]:
+            logging.info(
+                f"  - {hit.get('building_name')} (score: {hit.get('score', 0):.3f}, type: {hit.get('document_type')})")
+
+        # If we found building-specific results, use only those
+        if building_specific_hits:
+            unique_hits = building_specific_hits
+        else:
+            # If no exact matches, keep all results but prioritize by building
+            logging.warning(
+                f"No exact matches for '{target_building}', using all results")
+            unique_hits = prioritize_building_results(
+                unique_hits, target_building)
 
     # Get top K results by score
-    top_hits = nlargest(top_k, unique_hits,
-                        key=lambda m: (m.get("score") or 0))
+    top_hits = nlargest(min(top_k, len(unique_hits)),
+                        unique_hits, key=lambda m: (m.get("score") or 0))
 
     answer = ""
     publication_date_info = ""
@@ -187,19 +241,24 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
     building_groups = group_results_by_building(top_hits)
     building_summary = get_building_context_summary(building_groups)
 
+    logging.info(f"Building groups: {list(building_groups.keys())}")
+
     if top_hits and st.session_state.get("generate_llm_answer", True):
         # If query is building-focused, use specialized answer generation
-        if target_building and len(building_groups) > 0:
+        if target_building and target_building in building_groups:
+            logging.info(
+                f"Generating building-focused answer for {target_building}")
             answer, publication_date_info = generate_building_focused_answer(
                 query, top_hits[0], top_hits, target_building, building_groups
             )
         else:
             # Use standard answer generation
+            logging.info("Generating standard answer")
             answer, publication_date_info = enhanced_answer_with_source_date(
                 query, top_hits[0], top_hits
             )
 
-        # Add building summary if multiple buildings found
+        # Add building summary if multiple buildings found and not targeting specific building
         if len(building_groups) > 1 and not target_building:
             answer += f"\n\n**Note:** Results found across multiple buildings:\n"
             # Show top 3
@@ -242,13 +301,15 @@ def search_by_building(building_name: str, top_k: int = 10) -> List[Dict[str, An
         results = search_one_index(
             idx_name,
             f"building information for {building_name}",
-            top_k,
-            embed_model=None,
-            building_filter=building_name
+            top_k * 2,  # Get more results initially
+            embed_model=None
         )
         all_results.extend(results)
 
-    # Sort by score
-    all_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+    # Filter by building
+    filtered_results = filter_results_by_building(all_results, building_name)
 
-    return all_results
+    # Sort by score
+    filtered_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+
+    return filtered_results[:top_k]
