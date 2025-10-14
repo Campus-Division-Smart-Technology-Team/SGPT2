@@ -31,8 +31,7 @@ def extract_planon_date_from_text(text: str) -> Optional[str]:
     return None
 
 
-def get_document_dates_by_type(results: List[Dict[str, Any]],
-                               target_building: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Get separate dates for Planon data and operational documents.
     ALWAYS prioritises the highest-scoring operational_doc for the "last updated" date.
@@ -65,7 +64,8 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
             extracted_date = extract_planon_date_from_text(text)
             if extracted_date:
                 planon_date = extracted_date
-                logging.info("✓ Found Planon assessment date: %s", planon_date)
+                logging.info(
+                    "[SUCCESS] Found Planon assessment date: %s", planon_date)
                 break
 
     # Get operational document date from HIGHEST-SCORING operational doc
@@ -80,16 +80,25 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
             "Processing highest-scoring operational doc: %s (score: %.3f)",
             key_value, top_operational.get('score', 0))
 
+        # DEBUG: Log full metadata structure
+        logging.info("Available metadata fields: %s", list(metadata.keys()))
+        logging.info("Full metadata: %s", metadata)
+
         # STRATEGY 1: Check metadata first (fastest and most reliable)
         for date_field in ['last_modified', 'review_date', 'updated', 'revised', 'date', 'document_date']:
-            operational_date = metadata.get(date_field)
-            if operational_date and operational_date != "publication date unknown":
+            field_value = metadata.get(date_field)
+            logging.info("Checking metadata[%s]: %s", date_field, field_value)
+
+            if field_value and field_value != "publication date unknown":
+                operational_date = field_value
                 logging.info(
-                    "✓ Found date in metadata[%s]: %s", date_field, operational_date)
+                    "[SUCCESS] Found date in metadata[%s]: %s", date_field, operational_date)
                 break
 
         # STRATEGY 2: Search Pinecone index for dates
         if not operational_date and key_value:
+            logging.info(
+                "Metadata search failed, trying Pinecone index search...")
             idx_name = top_operational.get("index", "")
             if idx_name:
                 try:
@@ -106,23 +115,35 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
                     if latest_date:
                         operational_date = latest_date
                         logging.info(
-                            "✓ Found date via index search: %s", operational_date)
+                            "[SUCCESS] Found date via index search: %s", operational_date)
                     else:
                         logging.warning(
-                            "✗ No date found in search_source_for_latest_date for %s", key_value)
+                            "[FAILED] No date found in search_source_for_latest_date for %s", key_value)
                 except (KeyError, ValueError, RuntimeError) as e:
                     logging.error(
-                        "✗ Error fetching operational date: %s", e, exc_info=True)
+                        "[FAILED] Error fetching operational date: %s", e, exc_info=True)
+            else:
+                logging.warning(
+                    "[FAILED] No index name available for Pinecone search")
 
         # STRATEGY 3: Extract from text as last resort
         if not operational_date:
+            logging.info("Pinecone search failed, trying text extraction...")
             operational_date = extract_date_from_single_result(top_operational)
             if operational_date:
                 logging.info(
-                    "✓ Extracted date from operational doc text: %s", operational_date)
+                    "[SUCCESS] Extracted date from operational doc text: %s", operational_date)
             else:
                 logging.warning(
-                    "✗ No date found for operational doc %s using any method", key_value)
+                    "[FAILED] No date found for operational doc %s using any method", key_value)
+
+    # Final summary log
+    logging.info("=" * 60)
+    logging.info("DATE EXTRACTION SUMMARY:")
+    logging.info("Planon date: %s", planon_date or "NOT FOUND")
+    logging.info("Operational date: %s", operational_date or "NOT FOUND")
+    logging.info("Operational doc key: %s", operational_doc_key or "NOT FOUND")
+    logging.info("=" * 60)
 
     return planon_date, operational_date, operational_doc_key
 
@@ -146,7 +167,7 @@ def format_date_information(planon_date: Optional[str],
     display_parts = []
 
     # Format operational document date FIRST (it's the primary date)
-    if operational_date:  # ✅ FIXED: Only require the date, not the key
+    if operational_date:
         parsed = parse_date_string(operational_date)
         display_date = format_display_date(parsed)
 
@@ -290,19 +311,20 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
     logging.info(
         "Has 'last_modified' in metadata: %s", 'last_modified' in top_result.get('metadata', {}))
     logging.info("=" * 60)
+
     # Get building name from top result
     building_name = top_result.get("building_name", "Unknown")
 
-    # Get dates by document type - prioritizing highest-scoring operational doc
+    # Get dates by document type - prioritising highest-scoring operational doc
     planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
-        all_results, building_name)
+        all_results)
 
     # Format date information with operational doc date first
     date_context, publication_info = format_date_information(
         planon_date, operational_date, operational_doc_key
     )
 
-    # Build context with building prioritization
+    # Build context with building prioritisation
     snippets = [r.get("text", "") for r in all_results if r.get("text")]
     context = build_context(snippets, prioritise_building=True)
 
@@ -379,9 +401,9 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
     operational_docs = [r for r in target_results if r.get(
         'document_type') == 'operational_doc']
 
-    # Get dates by type - prioritizing highest-scoring operational doc
+    # Get dates by type - prioritising highest-scoring operational doc
     planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
-        target_results, target_building)
+        target_results)
 
     # Format date information with operational doc date first
     date_context, publication_info = format_date_information(
