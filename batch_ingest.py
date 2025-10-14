@@ -540,6 +540,7 @@ def ingest_bucket(bucket: str, prefix: str = ""):
                     "bucket": bucket,
                     "key": key,
                     "building_name": building_name,  # Add building name for cross-reference
+                    "original_file": key,
                     "chunk": i + j,
                     "source": f"s3://{bucket}/{key}",
                     "size": size,
