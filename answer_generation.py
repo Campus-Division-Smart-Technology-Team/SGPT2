@@ -31,21 +31,24 @@ def extract_planon_date_from_text(text: str) -> Optional[str]:
     return None
 
 
-def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
     """
-    Get separate dates for Planon data and operational documents.
+    Get separate dates for Planon data, operational documents, and FRA documents.
     ALWAYS prioritises the highest-scoring operational_doc for the "last updated" date.
 
     Returns:
-        (planon_date, operational_date, operational_doc_key)
+        (planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key)
     """
     planon_date = None
     operational_date = None
     operational_doc_key = None
+    fra_date = None
+    fra_doc_key = None
 
     # Separate results by type - CHECK METADATA for document_type
     planon_results = []
     operational_results = []
+    fra_results = []
 
     for r in results:
         # Get document_type from metadata, not top level
@@ -56,14 +59,20 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
             planon_results.append(r)
         elif doc_type == 'operational_doc':
             operational_results.append(r)
+        elif doc_type == 'fire_risk_assessment':
+            fra_results.append(r)
 
     # Sort operational results by score to get the highest-scoring one
     operational_results = sorted(
         operational_results, key=lambda x: x.get('score', 0), reverse=True)
 
+    # Sort FRA results by score
+    fra_results = sorted(
+        fra_results, key=lambda x: x.get('score', 0), reverse=True)
+
     logging.info(
-        "Found %d operational docs and %d planon records",
-        len(operational_results), len(planon_results))
+        "Found %d operational docs, %d planon records, and %d FRA documents",
+        len(operational_results), len(planon_results), len(fra_results))
 
     # Get Planon date ONLY from property condition assessment
     if planon_results:
@@ -148,20 +157,46 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
                 logging.warning(
                     "[FAILED] No date found for operational doc %s using any method", key_value)
 
+     # Get FRA date from highest-scoring FRA document
+    if fra_results:
+        top_fra = fra_results[0]
+        fra_doc_key = top_fra.get("key", "")
+        metadata = top_fra.get('metadata', {})
+
+        logging.info(
+            "Processing highest-scoring FRA doc: %s (score: %.3f)",
+            fra_doc_key, top_fra.get('score', 0))
+
+        fra_date = metadata.get('fra_date')
+        if fra_date:
+            logging.info("[SUCCESS] Found FRA assessment date: %s", fra_date)
+        else:
+            # Fallback: try to extract from text
+            text = top_fra.get('text', '') or metadata.get('text', '')
+            fra_date = extract_planon_date_from_text(
+                text)  # Reuse this function
+            if fra_date:
+                logging.info(
+                    "[SUCCESS] Extracted FRA date from text: %s", fra_date)
+
     # Final summary log
     logging.info("=" * 60)
     logging.info("DATE EXTRACTION SUMMARY:")
     logging.info("Planon date: %s", planon_date or "NOT FOUND")
     logging.info("Operational date: %s", operational_date or "NOT FOUND")
     logging.info("Operational doc key: %s", operational_doc_key or "NOT FOUND")
+    logging.info("FRA date: %s", fra_date or "NOT FOUND")
+    logging.info("FRA doc key: %s", fra_doc_key or "NOT FOUND")
     logging.info("=" * 60)
 
-    return planon_date, operational_date, operational_doc_key
+    return planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key
 
 
 def format_date_information(planon_date: Optional[str],
                             operational_date: Optional[str],
-                            operational_doc_key: Optional[str] = None) -> Tuple[str, str]:
+                            operational_doc_key: Optional[str] = None,
+                            fra_date: Optional[str] = None,
+                            fra_doc_key: Optional[str] = None) -> Tuple[str, str]:
     """
     Format date information for display and context.
     Emphasises operational doc date as the primary "last updated" date.
@@ -170,6 +205,8 @@ def format_date_information(planon_date: Optional[str],
         planon_date: Property condition assessment date
         operational_date: Operational document last updated date
         operational_doc_key: Key/filename of operational document
+        fra_date: Fire risk assessment date
+        fra_doc_key: Key/filename of FRA document
 
     Returns:
         (date_context_for_llm, publication_info_for_display)
@@ -182,9 +219,7 @@ def format_date_information(planon_date: Optional[str],
         parsed = parse_date_string(operational_date)
         display_date = format_display_date(parsed)
 
-        # Build context string
         if operational_doc_key:
-            # Clean up the document key for display (remove path and .pdf)
             doc_display = operational_doc_key.replace(
                 'UoB-', '').replace('.pdf', '').replace('-', ' ')
 
@@ -193,13 +228,11 @@ def format_date_information(planon_date: Optional[str],
             display_parts.append(
                 f"📄 **Document last updated**: **{display_date}** ({doc_display})")
         else:
-            # No key, but we have a date
             context_parts.append(
                 f"BMS/Operational documentation: Last updated {display_date}. This is the primary date for technical/BMS information.")
             display_parts.append(
                 f"📄 **Document last updated**: **{display_date}**")
     elif operational_doc_key:
-        # We have the doc but no date
         doc_display = operational_doc_key.replace(
             'UoB-', '').replace('.pdf', '').replace('-', ' ')
         context_parts.append(
@@ -207,7 +240,26 @@ def format_date_information(planon_date: Optional[str],
         display_parts.append(
             f"📄 **Document** ({doc_display}): date unknown")
 
-    # Format Planon date SECOND (supplementary information)
+    # Format FRA date SECOND
+    if fra_date:
+        parsed = parse_date_string(fra_date)
+        display_date = format_display_date(parsed)
+
+        if fra_doc_key:
+            doc_display = fra_doc_key.replace(
+                'FM-FRA-', '').replace('.docx', '').replace('.pdf', '').replace('-', ' ')
+
+            context_parts.append(
+                f"Fire Risk Assessment ('{fra_doc_key}'): Assessment date {display_date}. This shows when the fire safety assessment was conducted.")
+            display_parts.append(
+                f"🔥 **Fire Risk Assessment**: **{display_date}** ({doc_display})")
+        else:
+            context_parts.append(
+                f"Fire Risk Assessment: Assessment date {display_date}.")
+            display_parts.append(
+                f"🔥 **Fire Risk Assessment**: **{display_date}**")
+
+    # Format Planon date THIRD (supplementary information)
     if planon_date:
         parsed = parse_date_string(planon_date)
         display_date = format_display_date(parsed)
@@ -337,13 +389,13 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
     building_name = metadata.get('building_name') or top_result.get(
         "building_name", "Unknown")
 
-    # Get dates by document type - prioritising highest-scoring operational doc
-    planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
+    # Get dates by document type - NOW RETURNS 5 VALUES
+    planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key = get_document_dates_by_type(
         all_results)
 
     # Format date information with operational doc date first
     date_context, publication_info = format_date_information(
-        planon_date, operational_date, operational_doc_key
+        planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key
     )
 
     # Build context with building prioritisation
@@ -425,6 +477,7 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
     # Separate by document type - check metadata
     property_data = []
     operational_docs = []
+    fra_docs = []
 
     for r in target_results:
         metadata = r.get('metadata', {})
@@ -434,15 +487,28 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
             property_data.append(r)
         elif doc_type == 'operational_doc':
             operational_docs.append(r)
+        elif doc_type == 'fire_risk_assessment':
+            fra_docs.append(r)
 
-    # Get dates by type - prioritising highest-scoring operational doc
-    planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
+    # Get dates by type - NOW RETURNS 5 VALUES
+    planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key = get_document_dates_by_type(
         target_results)
 
-    # Format date information with operational doc date first
+    # Format date information
     date_context, publication_info = format_date_information(
-        planon_date, operational_date, operational_doc_key
+        planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key
     )
+
+    # ... rest remains the same but update doc_summary
+    doc_summary = []
+    if property_data:
+        doc_summary.append(f"{len(property_data)} property/Planon record(s)")
+    if operational_docs:
+        doc_summary.append(
+            f"{len(operational_docs)} BMS/operational document(s)")
+    if fra_docs:
+        doc_summary.append(
+            f"{len(fra_docs)} fire risk assessment(s)")
 
     # Build grouped context
     context = build_building_grouped_context(target_results, max_chars=6000)
