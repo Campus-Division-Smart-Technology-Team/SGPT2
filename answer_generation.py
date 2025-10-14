@@ -8,7 +8,7 @@ import re
 from typing import Dict, List, Tuple, Any, Optional
 from clients import oai
 from config import ANSWER_MODEL, DEFAULT_NAMESPACE
-from date_utils import search_source_for_latest_date, parse_date_string, format_display_date
+from date_utils import search_source_for_latest_date, parse_date_string, format_display_date, extract_date_from_single_result
 from pinecone_utils import open_index
 
 
@@ -55,7 +55,8 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
         operational_results, key=lambda x: x.get('score', 0), reverse=True)
 
     logging.info(
-        "Found %d operational docs and %d planon records", len(operational_results), len(planon_results))
+        "Found %d operational docs and %d planon records",
+        len(operational_results), len(planon_results))
 
     # Get Planon date ONLY from property condition assessment
     if planon_results:
@@ -73,58 +74,55 @@ def get_document_dates_by_type(results: List[Dict[str, Any]],
         top_operational = operational_results[0]
         key_value = top_operational.get("key", "")
         operational_doc_key = key_value
-        idx_name = top_operational.get("index", "")
+        metadata = top_operational.get('metadata', {})
 
         logging.info(
-            "Using highest-scoring operational doc: %s (score: %.3f)", key_value, top_operational.get('score', 0))
+            "Processing highest-scoring operational doc: %s (score: %.3f)",
+            key_value, top_operational.get('score', 0))
 
-        if key_value and idx_name:
-            try:
-                idx = open_index(idx_name)
-                namespace = top_operational.get("namespace", DEFAULT_NAMESPACE)
+        # STRATEGY 1: Check metadata first (fastest and most reliable)
+        for date_field in ['last_modified', 'review_date', 'updated', 'revised', 'date', 'document_date']:
+            operational_date = metadata.get(date_field)
+            if operational_date and operational_date != "publication date unknown":
                 logging.info(
-                    "Searching for dates in index=%s, namespace=%s, key=%s", idx_name, namespace, key_value)
+                    "✓ Found date in metadata[%s]: %s", date_field, operational_date)
+                break
 
-                latest_date, _ = search_source_for_latest_date(
-                    idx, key_value, namespace
-                )
-                if latest_date:
-                    operational_date = latest_date
+        # STRATEGY 2: Search Pinecone index for dates
+        if not operational_date and key_value:
+            idx_name = top_operational.get("index", "")
+            if idx_name:
+                try:
+                    idx = open_index(idx_name)
+                    namespace = top_operational.get(
+                        "namespace", DEFAULT_NAMESPACE)
                     logging.info(
-                        "✓ Found operational doc date from %s: %s", key_value, operational_date)
-                else:
-                    logging.warning(
-                        "✗ No date found in search_source_for_latest_date for %s", key_value)
-            except Exception as e:
-                logging.error(
-                    "✗ Error fetching operational date: %s", e, exc_info=True)
+                        "Searching for dates in index=%s, namespace=%s, key=%s",
+                        idx_name, namespace, key_value)
 
-        # **FIXED: Fallback to metadata - check inside metadata dict**
+                    latest_date, _ = search_source_for_latest_date(
+                        idx, key_value, namespace
+                    )
+                    if latest_date:
+                        operational_date = latest_date
+                        logging.info(
+                            "✓ Found date via index search: %s", operational_date)
+                    else:
+                        logging.warning(
+                            "✗ No date found in search_source_for_latest_date for %s", key_value)
+                except (KeyError, ValueError, RuntimeError) as e:
+                    logging.error(
+                        "✗ Error fetching operational date: %s", e, exc_info=True)
+
+        # STRATEGY 3: Extract from text as last resort
         if not operational_date:
-            # Try last_modified from metadata
-            metadata = top_operational.get('metadata', {})
-            operational_date = metadata.get('last_modified')
+            operational_date = extract_date_from_single_result(top_operational)
             if operational_date:
                 logging.info(
-                    "Using last_modified from operational doc metadata: %s", operational_date)
+                    "✓ Extracted date from operational doc text: %s", operational_date)
             else:
-                # Try other date fields in metadata
-                for date_field in ['review_date', 'updated', 'revised', 'date', 'document_date']:
-                    operational_date = metadata.get(date_field)
-                    if operational_date and operational_date != "publication date unknown":
-                        logging.info(
-                            "Using %s from metadata: %s", date_field, operational_date)
-                        break
-
-                # Try to extract from text as last resort
-                if not operational_date:
-                    text = top_operational.get('text', '')
-                    from date_utils import extract_date_from_single_result
-                    operational_date = extract_date_from_single_result(
-                        top_operational)
-                    if operational_date:
-                        logging.info(
-                            "Extracted date from operational doc text: %s", operational_date)
+                logging.warning(
+                    "✗ No date found for operational doc %s using any method", key_value)
 
     return planon_date, operational_date, operational_doc_key
 

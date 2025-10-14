@@ -3,20 +3,21 @@
 """
 Federated search operations across multiple Pinecone indexes with building-aware search.
 """
-
-import streamlit as st
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from heapq import nlargest
+import streamlit as st
+from clients import oai
 
-from config import (TARGET_INDEXES, SEARCH_ALL_NAMESPACES, DEFAULT_NAMESPACE,
+
+from config import (TARGET_INDEXES, SEARCH_ALL_NAMESPACES, DEFAULT_NAMESPACE, DEFAULT_EMBED_MODEL,
                     SPECIAL_INFERENCE_INDEX, SPECIAL_INFERENCE_MODEL, MIN_SCORE_THRESHOLD)
 from pinecone_utils import (open_index, list_namespaces_for_index,
                             try_inference_search, vector_query, normalise_matches)
 from answer_generation import enhanced_answer_with_source_date, generate_building_focused_answer
 from date_utils import search_source_for_latest_date, parse_date_string, format_display_date
-from building_utils import (extract_building_from_query, group_results_by_building,
-                            prioritise_building_results, get_building_context_summary)
+from building_utils import (extract_building_from_query,
+                            group_results_by_building, prioritise_building_results)
 
 
 def _namespaces_to_search(idx):
@@ -25,13 +26,12 @@ def _namespaces_to_search(idx):
         return [DEFAULT_NAMESPACE]
     try:
         return list_namespaces_for_index(idx)
-    except Exception:
+    except RuntimeError:
         return [DEFAULT_NAMESPACE]
 
 
 def embed_texts(texts: List[str], model: str) -> List[List[float]]:
     """Generate embeddings for texts (helper for vector search with filters)."""
-    from clients import oai
     res = oai.embeddings.create(model=model, input=texts)
     return [d.embedding for d in res.data]
 
@@ -59,7 +59,6 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
                         idx, ns, question, k, model_name=None)
                     mode_used = "server-side (inference)"
                 except Exception:
-                    from config import DEFAULT_EMBED_MODEL
                     raw = vector_query(idx, ns, question, k,
                                        embed_model or DEFAULT_EMBED_MODEL)
                     mode_used = "client-side (vector)"
@@ -72,8 +71,8 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
                 m["_mode"] = mode_used
             hits.extend(norm)
 
-        except Exception as e:
-            logging.warning(f"Search failed for {idx_name}/{ns}: {e}")
+        except RuntimeError as e:
+            logging.warning("Search failed for %s/%s: %s", idx_name, ns, e)
             continue
 
     return hits
@@ -306,7 +305,7 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
                     display_date = format_display_date(parsed)
                     publication_date_info = f"📅 Top operational document last updated: **{display_date}**"
                 else:
-                    publication_date_info = f"📅 **Publication date unknown** for top operational document"
+                    publication_date_info = "📅 **Publication date unknown** for top operational document"
 
     return top_hits, answer, publication_date_info, score_too_low
 

@@ -5,14 +5,14 @@ Main Streamlit application for Alfred the Gorilla chatbot.
 Enhanced with intelligent query classification and federated search.
 """
 
-import streamlit as st
 import logging
+import streamlit as st
 
 # Import our modules
 from ui_components import (
-    setup_page_config, render_custom_css, render_header, render_tabs, 
-    render_sidebar, display_search_results, display_publication_date_info,
-    display_low_score_warning, initialize_chat_history, display_chat_history
+    setup_page_config, render_custom_css, render_header, render_tabs,
+    render_sidebar, display_publication_date_info,
+    display_low_score_warning, initialise_chat_history, display_chat_history
 )
 from query_classifier import should_search_index
 from search_operations import perform_federated_search
@@ -27,20 +27,20 @@ def main():
     setup_page_config()
     render_custom_css()
     render_header()
-    
+
     # Render main content
     render_tabs()
-    
+
     # Render sidebar and get settings
     top_k = render_sidebar()
-    
+
     # Initialise and display chat
-    initialize_chat_history()
+    initialise_chat_history()
     display_chat_history()
-    
+
     # Handle new chat input
     handle_chat_input(top_k)
-    
+
     # Display last results if they exist
     display_last_results()
 
@@ -76,7 +76,8 @@ def handle_search_query(query, top_k):
     with st.chat_message("assistant", avatar="🦍"):
         with st.spinner("Searching across indexes and analysing document dates..."):
             try:
-                results, answer, publication_date_info, score_too_low = perform_federated_search(query, top_k)
+                results, answer, publication_date_info, score_too_low = perform_federated_search(
+                    query, top_k)
 
                 # Store results in session state
                 st.session_state.last_results = results
@@ -105,7 +106,8 @@ def handle_search_query(query, top_k):
 
                         # Display publication date info prominently
                         if publication_date_info:
-                            display_publication_date_info(publication_date_info)
+                            display_publication_date_info(
+                                publication_date_info)
 
                         # Store message with results and publication date info
                         st.session_state.messages.append({
@@ -173,7 +175,8 @@ def display_last_results():
                     f"_Document:_ `{result.get('key', 'Unknown')}`  •  _Index:_ `{result.get('index', '?')}`"
                 )
                 snippet = result.get("text") or "_(no text in metadata)_"
-                st.write(snippet[:300] + "..." if len(snippet) > 300 else snippet)
+                st.write(snippet[:300] + "..." if len(snippet)
+                         > 300 else snippet)
                 if i < len(st.session_state.last_results):
                     st.markdown("---")
 
