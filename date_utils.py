@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
-from pinecone_utils import normalize_matches
+from pinecone_utils import normalise_matches
 from config import DEFAULT_NAMESPACE
 
 
@@ -75,13 +75,13 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
         (latest_date_str, matching_documents)
     """
     try:
-        logging.info(f"=" * 60)
-        logging.info(f"SEARCHING FOR DATE:")
-        logging.info(
-            f"  Index: {idx._index_name if hasattr(idx, '_index_name') else 'unknown'}")
-        logging.info(f"  Namespace: {namespace}")
-        logging.info(f"  Key: {key_value}")
-        logging.info(f"=" * 60)
+        logging.info("=" * 60)
+        logging.info("SEARCHING FOR DATE:")
+        logging.info("  Index: %s", idx._index_name if hasattr(
+            idx, '_index_name') else 'unknown')
+        logging.info("  Namespace: %s", namespace)
+        logging.info("  Key: %s", key_value)
+        logging.info("=" * 60)
 
         # Strategy 1: Try metadata filtering to get all chunks from this document
         matching_docs = []
@@ -94,7 +94,7 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
                 namespace=namespace,
                 include_metadata=True
             )
-            matching_docs = normalize_matches(raw)
+            matching_docs = normalise_matches(raw)
             logging.info(
                 f"✓ Found {len(matching_docs)} chunks using metadata filter for key='{key_value}'")
         except Exception as e:
@@ -118,7 +118,7 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
                 raw = vector_query(
                     idx, namespace, source_query, 50, DEFAULT_EMBED_MODEL)
 
-            results = normalize_matches(raw)
+            results = normalise_matches(raw)
 
             # Filter to exact key matches only
             matching_docs = [r for r in results if r.get("key") == key_value]
@@ -190,7 +190,7 @@ def search_source_for_latest_date(idx, key_value: str, namespace: str = DEFAULT_
                             logging.info(
                                 f"  ✓ Chunk {chunk_num}: Found date in metadata[{date_field}]: {date_val}")
 
-            # Then search through text with prioritized patterns
+            # Then search through text with prioritised patterns
             for pattern, pattern_type, priority in date_patterns:
                 matches = re.findall(pattern, text, re.IGNORECASE)
                 for match in matches:

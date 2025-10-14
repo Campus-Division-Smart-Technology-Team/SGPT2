@@ -4,25 +4,19 @@
 Federated search operations across multiple Pinecone indexes with building-aware search.
 """
 
-from typing import Dict, List, Optional, Any, Tuple
-from heapq import nlargest
 import streamlit as st
 import logging
+from typing import Dict, List, Optional, Any, Tuple
+from heapq import nlargest
 
-from config import (
-    TARGET_INDEXES, SEARCH_ALL_NAMESPACES, DEFAULT_NAMESPACE,
-    SPECIAL_INFERENCE_INDEX, SPECIAL_INFERENCE_MODEL, MIN_SCORE_THRESHOLD
-)
-from pinecone_utils import (
-    open_index, list_namespaces_for_index, try_inference_search,
-    vector_query, normalize_matches
-)
+from config import (TARGET_INDEXES, SEARCH_ALL_NAMESPACES, DEFAULT_NAMESPACE,
+                    SPECIAL_INFERENCE_INDEX, SPECIAL_INFERENCE_MODEL, MIN_SCORE_THRESHOLD)
+from pinecone_utils import (open_index, list_namespaces_for_index,
+                            try_inference_search, vector_query, normalise_matches)
 from answer_generation import enhanced_answer_with_source_date, generate_building_focused_answer
 from date_utils import search_source_for_latest_date, parse_date_string, format_display_date
-from building_utils import (
-    extract_building_from_query, group_results_by_building,
-    prioritize_building_results, get_building_context_summary
-)
+from building_utils import (extract_building_from_query, group_results_by_building,
+                            prioritise_building_results, get_building_context_summary)
 
 
 def _namespaces_to_search(idx):
@@ -70,7 +64,7 @@ def search_one_index(idx_name: str, question: str, k: int, embed_model: Optional
                                        embed_model or DEFAULT_EMBED_MODEL)
                     mode_used = "client-side (vector)"
 
-            norm = normalize_matches(raw)
+            norm = normalise_matches(raw)
 
             for m in norm:
                 m["index"] = idx_name
@@ -153,7 +147,7 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
     target_building = extract_building_from_query(query)
 
     if target_building:
-        logging.info(f"🏢 Detected building: {target_building}")
+        logging.info("🏢 Detected building: %s", target_building)
         st.info(
             f"🏢 Detected building: **{target_building}** - searching for all related documents")
 
@@ -182,28 +176,33 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
             seen_ids.add(hit_id)
             unique_hits.append(hit)
 
-    logging.info(f"Total unique hits before filtering: {len(unique_hits)}")
+    logging.info("Total unique hits before filtering: %d", len(unique_hits))
 
     # DEBUG: Log document types found
     doc_type_counts = {}
     for hit in unique_hits:
         doc_type = hit.get('document_type', 'unknown')
         doc_type_counts[doc_type] = doc_type_counts.get(doc_type, 0) + 1
-    logging.info(f"Document types found: {doc_type_counts}")
+    logging.info("Document types found: %s", doc_type_counts)
 
     # DEBUG: Log top 5 results before filtering
     logging.info("Top 5 results before filtering:")
     for i, hit in enumerate(unique_hits[:5]):
         logging.info(
-            f"  {i+1}. building_name='{hit.get('building_name')}', doc_type='{hit.get('document_type')}', score={hit.get('score', 0):.3f}, key='{hit.get('key', '')[:50]}'")
-
-    # If we have a target building, filter and prioritize
+            "  %d. building_name='%s', doc_type='%s', score=%.3f, key='%s'",
+            i+1,
+            hit.get('building_name'),
+            hit.get('document_type'),
+            hit.get('score', 0),
+            hit.get('key', '')[:50]
+        )
+    # If we have a target building, filter and prioritise
     if target_building:
         building_specific_hits = filter_results_by_building(
             unique_hits, target_building)
 
-        logging.info(
-            f"Hits matching '{target_building}': {len(building_specific_hits)}")
+        logging.info("Hits matching '%s': %d", target_building,
+                     len(building_specific_hits))
 
         # DEBUG: Log document types in filtered results
         filtered_doc_type_counts = {}
@@ -211,20 +210,24 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
             doc_type = hit.get('document_type', 'unknown')
             filtered_doc_type_counts[doc_type] = filtered_doc_type_counts.get(
                 doc_type, 0) + 1
-        logging.info(f"Filtered document types: {filtered_doc_type_counts}")
+        logging.info("Filtered document types: %s", filtered_doc_type_counts)
 
         # Log what we found
         logging.info("Top results after filtering:")
         for i, hit in enumerate(building_specific_hits[:5]):
             logging.info(
-                f"  {i+1}. building_name='{hit.get('building_name')}', doc_type='{hit.get('document_type')}', score={hit.get('score', 0):.3f}")
-
+                "  %d. building_name='%s', doc_type='%s', score=%.3f",
+                i+1,
+                hit.get('building_name'),
+                hit.get('document_type'),
+                hit.get('score', 0))
+        # If we found any matches, use them; otherwise, fall back to prioritised full list
         if building_specific_hits:
             unique_hits = building_specific_hits
         else:
             logging.warning(
-                f"No exact matches for '{target_building}', using all results")
-            unique_hits = prioritize_building_results(
+                "No exact matches for '%s', using all results", target_building)
+            unique_hits = prioritise_building_results(
                 unique_hits, target_building)
 
     # Get top K results by score
@@ -232,10 +235,15 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
                         unique_hits, key=lambda m: (m.get("score") or 0))
 
     # DEBUG: Log final top results
-    logging.info(f"Final top {len(top_hits)} results:")
+    logging.info("Final top %d results:", len(top_hits))
     for i, hit in enumerate(top_hits):
         logging.info(
-            f"  {i+1}. building_name='{hit.get('building_name')}', doc_type='{hit.get('document_type')}', score={hit.get('score', 0):.3f}, key='{hit.get('key', '')[:50]}'")
+            "  %d. building_name='%s', doc_type='%s', score=%.3f, key='%s'",
+            i+1,
+            hit.get('building_name'),
+            hit.get('document_type'),
+            hit.get('score', 0),
+            hit.get('key', '')[:50])
 
     answer = ""
     publication_date_info = ""
@@ -251,15 +259,15 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
 
     # Group results by building for better context
     building_groups = group_results_by_building(top_hits)
-    building_summary = get_building_context_summary(building_groups)
+    # building_summary = get_building_context_summary(building_groups)
 
-    logging.info(f"Building groups: {list(building_groups.keys())}")
+    logging.info("Building groups: %s", list(building_groups.keys()))
 
     if top_hits and st.session_state.get("generate_llm_answer", True):
-        # If query is building-focused, use specialized answer generation
+        # If query is building-focused, use specialised answer generation
         if target_building and target_building in building_groups:
             logging.info(
-                f"Generating building-focused answer for {target_building}")
+                "Generating building-focused answer for %s", target_building)
             answer, publication_date_info = generate_building_focused_answer(
                 query, top_hits[0], top_hits, target_building, building_groups
             )
@@ -272,7 +280,7 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
 
         # Add building summary if multiple buildings found and not targeting specific building
         if len(building_groups) > 1 and not target_building:
-            answer += f"\n\n**Note:** Results found across multiple buildings:\n"
+            answer += "\n\n**Note:** Results found across multiple buildings:\n"
             for building, results in list(building_groups.items())[:3]:
                 answer += f"\n- **{building}**: {len(results)} result(s)"
 
@@ -286,8 +294,9 @@ def perform_federated_search(query: str, top_k: int) -> Tuple[List[Dict[str, Any
             top_operational = operational_docs[0]  # Already sorted by score
             key_value = top_operational.get("key", "")
 
-            if key_value and top_operational.get("index"):
-                idx = open_index(top_operational.get("index"))
+            index_name = top_operational.get("index") or ""
+            if key_value and index_name:
+                idx = open_index(index_name)
                 latest_date, _ = search_source_for_latest_date(
                     idx, key_value, top_operational.get(
                         "namespace", DEFAULT_NAMESPACE)

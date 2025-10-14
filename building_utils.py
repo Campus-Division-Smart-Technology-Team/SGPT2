@@ -10,7 +10,7 @@ from difflib import get_close_matches
 import logging
 
 
-def extract_building_from_query(query: str, known_buildings: List[str] = None) -> Optional[str]:
+def extract_building_from_query(query: str, known_buildings: Optional[List[str]] = None) -> Optional[str]:
     """
     Extract building name/code from user query using multiple strategies.
     """
@@ -28,7 +28,7 @@ def extract_building_from_query(query: str, known_buildings: List[str] = None) -
 
     for building in common_buildings:
         if building.lower() in query_lower:
-            logging.info(f"Found common building in query: '{building}'")
+            logging.info("Found common building in query: '%s'", building)
             return building
 
     # Strategy 2: Explicit building references with patterns
@@ -95,9 +95,9 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
     return None
 
 
-def normalize_building_name(building_name: str) -> str:
+def normalise_building_name(building_name: str) -> str:
     """
-    Normalize a building name by removing common suffixes.
+    Normalise a building name by removing common suffixes.
     E.g., "Senate House BMS Controls" -> "Senate House"
     """
     if not building_name:
@@ -112,16 +112,16 @@ def normalize_building_name(building_name: str) -> str:
         r'\s+-\s+.*$',  # Remove anything after a dash
     ]
 
-    normalized = building_name
+    normalised = building_name
     for pattern in patterns:
-        normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
+        normalised = re.sub(pattern, '', normalised, flags=re.IGNORECASE)
 
-    return normalized.strip()
+    return normalised.strip()
 
 
 def group_results_by_building(results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Group search results by normalized building name.
+    Group search results by normalised building name.
     This ensures "Senate House" and "Senate House BMS Controls" are grouped together.
     """
     grouped = {}
@@ -129,20 +129,20 @@ def group_results_by_building(results: List[Dict[str, Any]]) -> Dict[str, List[D
     for result in results:
         building_name = result.get('building_name', 'Unknown')
 
-        # Normalize the building name for grouping
-        normalized_name = normalize_building_name(building_name)
+        # Normalise the building name for grouping
+        normalised_name = normalise_building_name(building_name)
 
         # If normalization made it empty, use original
-        if not normalized_name:
-            normalized_name = building_name
+        if not normalised_name:
+            normalised_name = building_name
 
-        if normalized_name not in grouped:
-            grouped[normalized_name] = []
+        if normalised_name not in grouped:
+            grouped[normalised_name] = []
 
-        # Store with normalized name for consistent grouping
+        # Store with normalised name for consistent grouping
         result_copy = result.copy()
-        result_copy['_normalized_building'] = normalized_name
-        grouped[normalized_name].append(result_copy)
+        result_copy['_normalised_building'] = normalised_name
+        grouped[normalised_name].append(result_copy)
 
     return grouped
 
@@ -167,16 +167,16 @@ def get_building_context_summary(building_results: Dict[str, List[Dict[str, Any]
     return "Buildings found:\n" + "\n".join(summary_parts)
 
 
-def prioritize_building_results(results: List[Dict[str, Any]],
+def prioritise_building_results(results: List[Dict[str, Any]],
                                 target_building: str) -> List[Dict[str, Any]]:
     """
-    Reorder results to prioritize a specific building.
+    Reorder results to prioritise a specific building.
     Uses flexible matching to catch name variations.
     """
     if not target_building:
         return results
 
-    target_normalized = normalize_building_name(target_building).lower()
+    target_normalised = normalise_building_name(target_building).lower()
 
     # Separate results: target building first, then others
     priority_results = []
@@ -184,18 +184,18 @@ def prioritize_building_results(results: List[Dict[str, Any]],
 
     for result in results:
         building_name = result.get('building_name', '')
-        normalized = normalize_building_name(building_name).lower()
+        normalised = normalise_building_name(building_name).lower()
 
         # Check if this result matches the target building
-        if (target_normalized in normalized or
-            normalized in target_normalized or
+        if (target_normalised in normalised or
+            normalised in target_normalised or
                 target_building.lower() in building_name.lower()):
             priority_results.append(result)
         else:
             other_results.append(result)
 
     logging.info(
-        f"Prioritized {len(priority_results)} results for '{target_building}', {len(other_results)} other results")
+        f"Prioritised {len(priority_results)} results for '{target_building}', {len(other_results)} other results")
 
     # Return combined list with priority results first
     return priority_results + other_results

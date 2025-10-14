@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-UI components and styling for the Streamlit app.
+UI components and styling for the AskAlfred Streamlit app.
 """
 
 import streamlit as st
@@ -160,7 +160,8 @@ def render_sidebar():
     """Render the sidebar with settings."""
     with st.sidebar:
         st.header("Settings")
-        top_k = st.slider("Results per query", min_value=1, max_value=25, value=5)
+        top_k = st.slider("Results per query", min_value=1,
+                          max_value=25, value=5)
 
         if "generate_llm_answer" not in st.session_state:
             st.session_state.generate_llm_answer = True
@@ -190,15 +191,15 @@ def render_sidebar():
                 "Server-side inference is forced for 'apples'; others try inference then vector.")
             st.caption(
                 "Enhanced: Smart query classification, document-level date search, and relevance threshold.")
-    
+
     return top_k
 
 
-def display_search_results(results, message_idx=None):
+def display_search_results(results):
     """Display search results in an expandable section."""
     if not results:
         return
-        
+
     with st.expander(f"📚 Search Results ({len(results)} found)", expanded=False):
         for i, result in enumerate(results, 1):
             # Highlight the top result
@@ -230,7 +231,7 @@ def display_low_score_warning():
                 unsafe_allow_html=True)
 
 
-def initialize_chat_history():
+def initialise_chat_history():
     """Initialise chat history if not present."""
     if "messages" not in st.session_state:
         st.session_state.messages = [

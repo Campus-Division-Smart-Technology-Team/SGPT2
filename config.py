@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Configuration settings for Alfred the Gorilla chatbot.
+Configuration settings for AskAlfred chatbot.
 """
 
 import os
@@ -31,7 +31,8 @@ DEFAULT_NAMESPACE = "__default__"
 TARGET_INDEXES = ["apples", "bms"]  # federated search targets
 SEARCH_ALL_NAMESPACES = True
 
-DEFAULT_EMBED_MODEL = os.getenv("DEFAULT_EMBED_MODEL", "text-embedding-3-small")
+DEFAULT_EMBED_MODEL = os.getenv(
+    "DEFAULT_EMBED_MODEL", "text-embedding-3-small")
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 DIMENSION = 1536  # for text-embedding-3-small
 

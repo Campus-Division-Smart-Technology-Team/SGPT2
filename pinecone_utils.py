@@ -38,7 +38,8 @@ def list_namespaces_for_index(idx) -> List[str]:
         if DEFAULT_NAMESPACE not in names and "" not in names:
             names.append(DEFAULT_NAMESPACE)
         names = [DEFAULT_NAMESPACE if n == "" else n for n in names]
-        names = sorted(list(set(names)), key=lambda n: (n != DEFAULT_NAMESPACE, n))
+        names = sorted(list(set(names)), key=lambda n: (
+            n != DEFAULT_NAMESPACE, n))
         return names
     except Exception:
         return [DEFAULT_NAMESPACE]
@@ -66,7 +67,9 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
             return idx.search(namespace=ns, inputs={"text": q}, top_k=k, include_metadata=True)
         except TypeError:
             pass
-        except Exception:
+        except AttributeError:
+            pass
+        except RuntimeError:
             pass
         return idx.search(namespace=ns, query={"inputs": {"text": q}, "top_k": k})
 
@@ -78,29 +81,36 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
             parameters={"input_type": "query", "truncate": "END"}
         )
         first = embs.data[0]
-        vec = first.get("values") if isinstance(first, dict) else getattr(first, "values", None)
+        vec = first.get("values") if isinstance(
+            first, dict) else getattr(first, "values", None)
         if vec is None:
-            vec = first.get("embedding") if isinstance(first, dict) else getattr(first, "embedding", None)
+            vec = first.get("embedding") if isinstance(
+                first, dict) else getattr(first, "embedding", None)
         if vec is None:
-            raise RuntimeError("Unexpected embeddings response shape; no vector values found")
+            raise RuntimeError(
+                "Unexpected embeddings response shape; no vector values found")
     except Exception as e:
-        raise RuntimeError(f"Server-side embedding failed: {e}")
+        raise RuntimeError(f"Server-side embedding failed: {e}") from e
 
     return idx.query(vector=vec, top_k=k, namespace=ns, include_metadata=True)
 
 
 def _as_dict(obj: Any) -> Dict[str, Any]:
-    """Convert object to dictionary if possible."""
+    """Convert object to dictionary if possible, else return empty dict."""
     to_dict = getattr(obj, "to_dict", None)
     if callable(to_dict):
         try:
-            return to_dict()
-        except Exception:
+            result = to_dict()
+            if isinstance(result, dict):
+                return result
+        except (TypeError, AttributeError):
             pass
-    return obj if isinstance(obj, dict) else {}
+    if isinstance(obj, dict):
+        return obj
+    return {}
 
 
-def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
+def normalise_matches(raw: Any) -> List[Dict[str, Any]]:
     """Normalise Pinecone results from either `matches` or `result.hits` shapes."""
     data = _as_dict(raw)
 
@@ -113,19 +123,22 @@ def normalize_matches(raw: Any) -> List[Dict[str, Any]]:
                 "score": m.get("score"),
                 "metadata": md or {},
                 "text": (md or {}).get("text") or (md or {}).get("content") or (md or {}).get("chunk") or (
-                        md or {}).get("body") or "",
+                    md or {}).get("body") or "",
                 "source": (md or {}).get("source") or (md or {}).get("url") or (md or {}).get("doc") or "",
-                "key": (md or {}).get("key") or "",  # Extract key from metadata
+                # Extract key from metadata
+                "key": (md or {}).get("key") or "",
                 # Skip publication_date from metadata as it's misleading
             })
         return out
 
-    hits = (data.get("result") or {}).get("hits") if isinstance(data, dict) else []
+    hits = (data.get("result") or {}).get(
+        "hits") if isinstance(data, dict) else []
     if isinstance(hits, list) and hits:
         out = []
         for h in hits:
             fields = h.get("fields") or h.get("metadata") or {}
-            text_val = fields.get("text") or fields.get("content") or fields.get("chunk") or fields.get("body") or ""
+            text_val = fields.get("text") or fields.get(
+                "content") or fields.get("chunk") or fields.get("body") or ""
             out.append({
                 "id": h.get("_id"),
                 "score": h.get("_score"),

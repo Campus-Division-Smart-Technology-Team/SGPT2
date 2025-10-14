@@ -1,3 +1,4 @@
+from typing import Optional
 import os
 import io
 import json
@@ -8,7 +9,7 @@ import math
 import random
 import argparse
 import logging
-from typing import Iterable, List, Dict, Tuple
+from typing import List, Dict, Tuple
 from datetime import datetime
 from difflib import get_close_matches
 
@@ -21,7 +22,7 @@ import pandas as pd
 import tiktoken
 from dotenv import load_dotenv
 
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec  # pylint: disable=no-name-in-module
 from openai import OpenAI
 from openai import APIError, RateLimitError
 
@@ -178,7 +179,7 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
     return extracted_name
 
 
-def extract_building_name_from_filename(filename: str, known_buildings: List[str] = None) -> str:
+def extract_building_name_from_filename(filename: str, known_buildings: Optional[List[str]] = None) -> str:
     """
     Extract building name from PDF/DOCX filename with improved accuracy.
     Removes operational suffixes and optionally uses fuzzy matching.
@@ -220,14 +221,14 @@ def extract_building_name_from_filename(filename: str, known_buildings: List[str
     # Clean up multiple spaces and trim
     name = re.sub(r'\s+', ' ', name).strip()
 
-    # Capitalize properly (handles cases like "senate house" -> "Senate House")
+    # Capitalise properly (handles cases like "senate house" -> "Senate House")
     name = ' '.join(word.capitalize() for word in name.split())
 
     # If we have known buildings, try to match using fuzzy matching
     if known_buildings:
         matched_name = find_closest_building_name(name, known_buildings)
         if matched_name != name:
-            logging.info(f"Fuzzy matched '{name}' -> '{matched_name}'")
+            logging.info("Fuzzy matched '%s' -> '%s'", name, matched_name)
             return matched_name
 
     return name
@@ -246,7 +247,7 @@ def extract_text_csv_by_building(key: str, data: bytes) -> List[Tuple[str, str, 
 
         if building_col not in df.columns:
             logging.warning(
-                f"Column '{building_col}' not found. Available columns: {df.columns.tolist()}")
+                "Column '%s' not found. Available columns: %s", building_col, df.columns.tolist())
             return [(key, "", df.to_string())]
 
         building_docs = []
@@ -340,13 +341,14 @@ def embed_texts_batch(texts: List[str], max_retries: int = 5) -> List[List[float
             return [d.embedding for d in resp.data]
         except (RateLimitError, APIError) as e:
             logging.warning(
-                f"Embedding API backoff (attempt {attempt+1}/{max_retries}): {e}")
+                "Embedding API backoff (attempt %d/%d): %s", attempt+1, max_retries, e)
             if attempt == max_retries - 1:
-                raise
+                return []
             backoff_sleep(attempt)
         except Exception as e:
-            logging.error(f"Embedding failed with unexpected error: {e}")
-            raise
+            logging.error("Embedding failed with unexpected error: %s", e)
+            return []
+    return []
 
 
 def make_id(bucket: str, key: str, chunk_idx: int) -> str:
@@ -362,13 +364,13 @@ def upsert_vectors(vectors: List[Tuple[str, List[float], Dict]]):
                 index.upsert(vectors=batch, namespace=NAMESPACE)
                 break
             except Exception as e:
-                logging.warning(f"Pinecone upsert retry {attempt+1}/5: {e}")
+                logging.warning("Pinecone upsert retry %d/5: %s", attempt+1, e)
                 if attempt == 4:
                     raise
                 backoff_sleep(attempt)
 
 
-def test_building_name_extraction(known_buildings: List[str] = None):
+def test_building_name_extraction(known_buildings: Optional[List[str]] = None):
     """Test building name extraction with sample filenames."""
     test_cases = [
         ("UoB-Senate-House-BMS-Controls-Basement-Panel.pdf", "Senate House"),
