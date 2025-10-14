@@ -43,11 +43,19 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
     operational_date = None
     operational_doc_key = None
 
-    # Separate results by type
-    planon_results = [r for r in results if r.get(
-        'document_type') == 'planon_data']
-    operational_results = [r for r in results if r.get(
-        'document_type') == 'operational_doc']
+    # Separate results by type - CHECK METADATA for document_type
+    planon_results = []
+    operational_results = []
+
+    for r in results:
+        # Get document_type from metadata, not top level
+        metadata = r.get('metadata', {})
+        doc_type = metadata.get('document_type') or r.get('document_type')
+
+        if doc_type == 'planon_data':
+            planon_results.append(r)
+        elif doc_type == 'operational_doc':
+            operational_results.append(r)
 
     # Sort operational results by score to get the highest-scoring one
     operational_results = sorted(
@@ -60,7 +68,8 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
     # Get Planon date ONLY from property condition assessment
     if planon_results:
         for result in planon_results:
-            text = result.get('text', '')
+            text = result.get('text', '') or result.get(
+                'metadata', {}).get('text', '')
             extracted_date = extract_planon_date_from_text(text)
             if extracted_date:
                 planon_date = extracted_date
@@ -82,23 +91,11 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
 
         # DEBUG: Log full metadata structure
         logging.info("Available metadata fields: %s", list(metadata.keys()))
-        logging.info("Full metadata: %s", metadata)
+        logging.info("Document key: %s", key_value)
 
-        # STRATEGY 1: Check metadata first (fastest and most reliable)
-        for date_field in ['last_modified', 'review_date', 'updated', 'revised', 'date', 'document_date']:
-            field_value = metadata.get(date_field)
-            logging.info("Checking metadata[%s]: %s", date_field, field_value)
-
-            if field_value and field_value != "publication date unknown":
-                operational_date = field_value
-                logging.info(
-                    "[SUCCESS] Found date in metadata[%s]: %s", date_field, operational_date)
-                break
-
-        # STRATEGY 2: Search Pinecone index for dates
-        if not operational_date and key_value:
-            logging.info(
-                "Metadata search failed, trying Pinecone index search...")
+        # CRITICAL: Use search_source_for_latest_date to properly find the document date
+        # by searching through ALL chunks of this document
+        if key_value:
             idx_name = top_operational.get("index", "")
             if idx_name:
                 try:
@@ -106,7 +103,7 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
                     namespace = top_operational.get(
                         "namespace", DEFAULT_NAMESPACE)
                     logging.info(
-                        "Searching for dates in index=%s, namespace=%s, key=%s",
+                        "Searching for dates across all chunks in index=%s, namespace=%s, key=%s",
                         idx_name, namespace, key_value)
 
                     latest_date, _ = search_source_for_latest_date(
@@ -115,20 +112,34 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
                     if latest_date:
                         operational_date = latest_date
                         logging.info(
-                            "[SUCCESS] Found date via index search: %s", operational_date)
+                            "[SUCCESS] Found date via comprehensive search: %s", operational_date)
                     else:
                         logging.warning(
-                            "[FAILED] No date found in search_source_for_latest_date for %s", key_value)
+                            "[FAILED] No date found in comprehensive search for %s", key_value)
                 except (KeyError, ValueError, RuntimeError) as e:
                     logging.error(
                         "[FAILED] Error fetching operational date: %s", e, exc_info=True)
             else:
                 logging.warning(
-                    "[FAILED] No index name available for Pinecone search")
+                    "[FAILED] No index name available for date search")
 
-        # STRATEGY 3: Extract from text as last resort
+        # FALLBACK: Try metadata fields (but skip last_modified as it's not reliable)
         if not operational_date:
-            logging.info("Pinecone search failed, trying text extraction...")
+            logging.info("Comprehensive search failed, checking metadata...")
+            for date_field in ['review_date', 'updated', 'revised', 'date', 'document_date']:
+                field_value = metadata.get(date_field)
+                logging.info(
+                    "Checking metadata[%s]: %s", date_field, field_value)
+
+                if field_value and field_value != "publication date unknown":
+                    operational_date = field_value
+                    logging.info(
+                        "[SUCCESS] Found date in metadata[%s]: %s", date_field, operational_date)
+                    break
+
+        # LAST RESORT: Extract from text
+        if not operational_date:
+            logging.info("Metadata search failed, trying text extraction...")
             operational_date = extract_date_from_single_result(top_operational)
             if operational_date:
                 logging.info(
@@ -251,11 +262,18 @@ def build_building_grouped_context(results: List[Dict[str, Any]],
 
     # Group by building
     for result in results:
-        building = result.get('building_name', 'Unknown Building')
+        # Get building_name from metadata first, then fallback to top level
+        metadata = result.get('metadata', {})
+        building = metadata.get('building_name') or result.get(
+            'building_name', 'Unknown Building')
+
         if building not in building_groups:
             building_groups[building] = {'planon': [], 'operational': []}
 
-        doc_type = result.get('document_type', 'unknown')
+        # Get document_type from metadata first, then fallback to top level
+        doc_type = metadata.get('document_type') or result.get(
+            'document_type', 'unknown')
+
         if doc_type == 'planon_data':
             building_groups[building]['planon'].append(result)
         else:
@@ -272,15 +290,18 @@ def build_building_grouped_context(results: List[Dict[str, Any]],
         if docs['planon']:
             section += "--- Property/Planon Data ---\n"
             for result in docs['planon'][:2]:  # Limit to 2 property records
-                text = result.get('text', '')
+                text = result.get('text', '') or result.get(
+                    'metadata', {}).get('text', '')
                 section += f"{text[:500]}\n\n"
 
         # Add operational docs
         if docs['operational']:
             section += "--- BMS/Operational Documentation ---\n"
             for result in docs['operational'][:3]:  # Limit to 3 operational docs
-                text = result.get('text', '')
-                key = result.get('key', '')
+                text = result.get('text', '') or result.get(
+                    'metadata', {}).get('text', '')
+                key = result.get('key', '') or result.get(
+                    'metadata', {}).get('key', '')
                 section += f"[{key}]:\n{text[:400]}\n\n"
 
         if char_count + len(section) > max_chars:
@@ -304,16 +325,17 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
     logging.info("=" * 60)
     logging.info("TOP RESULT DEBUG:")
     logging.info("Key: %s", top_result.get('key'))
-    logging.info("Document type: %s", top_result.get('document_type'))
-    logging.info("Building: %s", top_result.get('building_name'))
-    logging.info(
-        "Metadata keys: %s", list(top_result.get('metadata', {}).keys()))
-    logging.info(
-        "Has 'last_modified' in metadata: %s", 'last_modified' in top_result.get('metadata', {}))
+    metadata = top_result.get('metadata', {})
+    logging.info("Document type: %s", metadata.get(
+        'document_type') or top_result.get('document_type'))
+    logging.info("Building: %s", metadata.get('building_name')
+                 or top_result.get('building_name'))
+    logging.info("Metadata keys: %s", list(metadata.keys()))
     logging.info("=" * 60)
 
-    # Get building name from top result
-    building_name = top_result.get("building_name", "Unknown")
+    # Get building name from metadata first, then fallback to top level
+    building_name = metadata.get('building_name') or top_result.get(
+        "building_name", "Unknown")
 
     # Get dates by document type - prioritising highest-scoring operational doc
     planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
@@ -325,7 +347,12 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
     )
 
     # Build context with building prioritisation
-    snippets = [r.get("text", "") for r in all_results if r.get("text")]
+    snippets = []
+    for r in all_results:
+        text = r.get("text", "") or r.get('metadata', {}).get('text', "")
+        if text:
+            snippets.append(text)
+
     context = build_context(snippets, prioritise_building=True)
 
     # Determine what type of question this is
@@ -395,11 +422,18 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
         # Fallback to standard answer generation
         return enhanced_answer_with_source_date(question, top_result, all_results)
 
-    # Separate by document type
-    property_data = [r for r in target_results if r.get(
-        'document_type') == 'planon_data']
-    operational_docs = [r for r in target_results if r.get(
-        'document_type') == 'operational_doc']
+    # Separate by document type - check metadata
+    property_data = []
+    operational_docs = []
+
+    for r in target_results:
+        metadata = r.get('metadata', {})
+        doc_type = metadata.get('document_type') or r.get('document_type')
+
+        if doc_type == 'planon_data':
+            property_data.append(r)
+        elif doc_type == 'operational_doc':
+            operational_docs.append(r)
 
     # Get dates by type - prioritising highest-scoring operational doc
     planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
@@ -486,7 +520,10 @@ def compare_buildings_answer(question: str,
     for building, building_results in list(building_groups.items())[:5]:
         building_context = f"\n=== {building} ===\n"
         # Top 2 results per building
-        snippets = [r.get('text', '')[:300] for r in building_results[:2]]
+        snippets = []
+        for r in building_results[:2]:
+            text = r.get('text', '') or r.get('metadata', {}).get('text', '')
+            snippets.append(text[:300])
         building_context += "\n".join(snippets)
         context_parts.append(building_context)
 
