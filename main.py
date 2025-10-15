@@ -47,7 +47,7 @@ def main():
 
 def handle_chat_input(top_k):
     """Handle new chat input from user."""
-    if query := st.chat_input("Ask me about apple(s) or BMS..."):
+    if query := st.chat_input("Ask me about apple(s), BMS or FRAs..."):
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": query})
 

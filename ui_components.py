@@ -102,6 +102,7 @@ def render_tabs():
             You can ask me questions about:
             - 🍎 Apples (the fruit) and 💻 Apple Inc.  
             - 🏢 Building Management Systems (BMS) at the University of Bristol  
+            - 🔥 Fire Risk Assessments (FRAs) at the University of Bristol  
 
             Type your question in the chat below, and I'll search across our knowledge bases to find answers.
             """
@@ -139,10 +140,10 @@ def render_tabs():
                 - "Tell me about some Apple products"
                 - "Tell me about the different types of apples"
 
-                **General queries:**
-                - "Hello Alfred"
-                - "Who are you?"
-                - "What can you help with?"
+                **FRA topics:**
+                - "What is the maximum staff/visitors occupancy for Senate House?"
+                - "How many floors does 1 Catheral Square have?"
+                - "List the fire risks at 1-9 Old Park Hill?"
                 """
             )
         with col2:
@@ -152,6 +153,11 @@ def render_tabs():
                 - "How does the frost protection sequence operate in the Berkeley Square and Indoor Sports Hall BMS systems?"
                 - "What access levels are defined for controllers in the Retort House and Dentistry BMS manuals?"
                 - "How does the Mitsubishi AC controller integrate with the Trend IQ4 BMS?"
+
+                **General queries:**
+                - "Hello Alfred"
+                - "Who are you?"
+                - "What can you help with?"
                 """
             )
 
@@ -237,7 +243,7 @@ def initialise_chat_history():
         st.session_state.messages = [
             {
                 "role": "assistant",
-                "content": "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about apples and Building Management Systems. What would you like to know?"
+                "content": "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about UoB description of operations documents and FRAs (I also know a bit about apples). What would you like to know?"
             }
         ]
 
