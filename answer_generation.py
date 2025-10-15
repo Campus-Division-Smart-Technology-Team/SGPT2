@@ -31,24 +31,21 @@ def extract_planon_date_from_text(text: str) -> Optional[str]:
     return None
 
 
-def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
+def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Get separate dates for Planon data, operational documents, and FRA documents.
-    ALWAYS prioritises the highest-scoring operational_doc for the "last updated" date.
+    Get separate dates for Planon data and operational/FRA documents.
+    ALWAYS prioritises the highest-scoring operational_doc or fire_risk_assessment for the "last updated" date.
 
     Returns:
-        (planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key)
+        (planon_date, operational_date, operational_doc_key)
     """
     planon_date = None
     operational_date = None
     operational_doc_key = None
-    fra_date = None
-    fra_doc_key = None
 
     # Separate results by type - CHECK METADATA for document_type
     planon_results = []
     operational_results = []
-    fra_results = []
 
     for r in results:
         # Get document_type from metadata, not top level
@@ -57,22 +54,16 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
 
         if doc_type == 'planon_data':
             planon_results.append(r)
-        elif doc_type == 'operational_doc':
+        elif doc_type in ['operational_doc', 'fire_risk_assessment']:
             operational_results.append(r)
-        elif doc_type == 'fire_risk_assessment':
-            fra_results.append(r)
 
     # Sort operational results by score to get the highest-scoring one
     operational_results = sorted(
         operational_results, key=lambda x: x.get('score', 0), reverse=True)
 
-    # Sort FRA results by score
-    fra_results = sorted(
-        fra_results, key=lambda x: x.get('score', 0), reverse=True)
-
     logging.info(
-        "Found %d operational docs, %d planon records, and %d FRA documents",
-        len(operational_results), len(planon_results), len(fra_results))
+        "Found %d operational/FRA docs and %d planon records",
+        len(operational_results), len(planon_results))
 
     # Get Planon date ONLY from property condition assessment
     if planon_results:
@@ -86,16 +77,16 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
                     "[SUCCESS] Found Planon assessment date: %s", planon_date)
                 break
 
-    # Get operational document date from HIGHEST-SCORING operational doc
+    # Get operational document date from HIGHEST-SCORING operational or FRA doc
     if operational_results:
-        # Get the highest-scoring operational document
+        # Get the highest-scoring operational/FRA document
         top_operational = operational_results[0]
         key_value = top_operational.get("key", "")
         operational_doc_key = key_value
         metadata = top_operational.get('metadata', {})
 
         logging.info(
-            "Processing highest-scoring operational doc: %s (score: %.3f)",
+            "Processing highest-scoring operational/FRA doc: %s (score: %.3f)",
             key_value, top_operational.get('score', 0))
 
         # DEBUG: Log full metadata structure
@@ -157,46 +148,20 @@ def get_document_dates_by_type(results: List[Dict[str, Any]]) -> Tuple[Optional[
                 logging.warning(
                     "[FAILED] No date found for operational doc %s using any method", key_value)
 
-     # Get FRA date from highest-scoring FRA document
-    if fra_results:
-        top_fra = fra_results[0]
-        fra_doc_key = top_fra.get("key", "")
-        metadata = top_fra.get('metadata', {})
-
-        logging.info(
-            "Processing highest-scoring FRA doc: %s (score: %.3f)",
-            fra_doc_key, top_fra.get('score', 0))
-
-        fra_date = metadata.get('fra_date')
-        if fra_date:
-            logging.info("[SUCCESS] Found FRA assessment date: %s", fra_date)
-        else:
-            # Fallback: try to extract from text
-            text = top_fra.get('text', '') or metadata.get('text', '')
-            fra_date = extract_planon_date_from_text(
-                text)  # Reuse this function
-            if fra_date:
-                logging.info(
-                    "[SUCCESS] Extracted FRA date from text: %s", fra_date)
-
     # Final summary log
     logging.info("=" * 60)
     logging.info("DATE EXTRACTION SUMMARY:")
     logging.info("Planon date: %s", planon_date or "NOT FOUND")
     logging.info("Operational date: %s", operational_date or "NOT FOUND")
     logging.info("Operational doc key: %s", operational_doc_key or "NOT FOUND")
-    logging.info("FRA date: %s", fra_date or "NOT FOUND")
-    logging.info("FRA doc key: %s", fra_doc_key or "NOT FOUND")
     logging.info("=" * 60)
 
-    return planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key
+    return planon_date, operational_date, operational_doc_key
 
 
 def format_date_information(planon_date: Optional[str],
                             operational_date: Optional[str],
-                            operational_doc_key: Optional[str] = None,
-                            fra_date: Optional[str] = None,
-                            fra_doc_key: Optional[str] = None) -> Tuple[str, str]:
+                            operational_doc_key: Optional[str] = None) -> Tuple[str, str]:
     """
     Format date information for display and context.
     Emphasises operational doc date as the primary "last updated" date.
@@ -205,8 +170,6 @@ def format_date_information(planon_date: Optional[str],
         planon_date: Property condition assessment date
         operational_date: Operational document last updated date
         operational_doc_key: Key/filename of operational document
-        fra_date: Fire risk assessment date
-        fra_doc_key: Key/filename of FRA document
 
     Returns:
         (date_context_for_llm, publication_info_for_display)
@@ -221,45 +184,26 @@ def format_date_information(planon_date: Optional[str],
 
         if operational_doc_key:
             doc_display = operational_doc_key.replace(
-                'UoB-', '').replace('.pdf', '').replace('-', ' ')
+                'UoB-', '').replace('.pdf', '').replace('.docx', '').replace('-', ' ')
 
             context_parts.append(
-                f"BMS/Operational documentation ('{operational_doc_key}'): Last updated {display_date}. This is the primary date for technical/BMS information.")
+                f"Technical documentation ('{operational_doc_key}'): Last updated {display_date}. This is the primary date for technical/BMS/FRA information.")
             display_parts.append(
-                f"📄 **Document last updated**: **{display_date}** ({doc_display})")
+                f"📄 **Document last updated**: {display_date} ({doc_display})")
         else:
             context_parts.append(
-                f"BMS/Operational documentation: Last updated {display_date}. This is the primary date for technical/BMS information.")
+                f"Technical documentation: Last updated {display_date}. This is the primary date for technical/BMS/FRA information.")
             display_parts.append(
-                f"📄 **Document last updated**: **{display_date}**")
+                f"📄 **Document last updated**: {display_date}")
     elif operational_doc_key:
         doc_display = operational_doc_key.replace(
-            'UoB-', '').replace('.pdf', '').replace('-', ' ')
+            'UoB-', '').replace('.pdf', '').replace('.docx', '').replace('-', ' ')
         context_parts.append(
-            f"BMS/Operational documentation ('{operational_doc_key}'): Date not available")
+            f"Technical documentation ('{operational_doc_key}'): Date not available")
         display_parts.append(
             f"📄 **Document** ({doc_display}): date unknown")
 
-    # Format FRA date SECOND
-    if fra_date:
-        parsed = parse_date_string(fra_date)
-        display_date = format_display_date(parsed)
-
-        if fra_doc_key:
-            doc_display = fra_doc_key.replace(
-                'FM-FRA-', '').replace('.docx', '').replace('.pdf', '').replace('-', ' ')
-
-            context_parts.append(
-                f"Fire Risk Assessment ('{fra_doc_key}'): Assessment date {display_date}. This shows when the fire safety assessment was conducted.")
-            display_parts.append(
-                f"🔥 **Fire Risk Assessment**: **{display_date}** ({doc_display})")
-        else:
-            context_parts.append(
-                f"Fire Risk Assessment: Assessment date {display_date}.")
-            display_parts.append(
-                f"🔥 **Fire Risk Assessment**: **{display_date}**")
-
-    # Format Planon date THIRD (supplementary information)
+    # Format Planon date SECOND (supplementary information)
     if planon_date:
         parsed = parse_date_string(planon_date)
         display_date = format_display_date(parsed)
@@ -348,7 +292,7 @@ def build_building_grouped_context(results: List[Dict[str, Any]],
 
         # Add operational docs
         if docs['operational']:
-            section += "--- BMS/Operational Documentation ---\n"
+            section += "--- Technical/Operational Documentation ---\n"
             for result in docs['operational'][:3]:  # Limit to 3 operational docs
                 text = result.get('text', '') or result.get(
                     'metadata', {}).get('text', '')
@@ -389,13 +333,13 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
     building_name = metadata.get('building_name') or top_result.get(
         "building_name", "Unknown")
 
-    # Get dates by document type - NOW RETURNS 5 VALUES
-    planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key = get_document_dates_by_type(
+    # Get dates by document type - NOW RETURNS 3 VALUES
+    planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
         all_results)
 
     # Format date information with operational doc date first
     date_context, publication_info = format_date_information(
-        planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key
+        planon_date, operational_date, operational_doc_key
     )
 
     # Build context with building prioritisation
@@ -407,27 +351,20 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
 
     context = build_context(snippets, prioritise_building=True)
 
-    # Determine what type of question this is
-    question_lower = question.lower()
-    is_bms_query = any(term in question_lower for term in [
-                       'bms', 'building management', 'controls', 'hvac', 'system', 'frost', 'temperature', 'monitoring'])
-    is_property_query = any(term in question_lower for term in [
-                            'area', 'size', 'condition', 'rating', 'manager', 'facilities', 'campus', 'location'])
-
     prompt = f"""Your name is Alfred, a helpful assistant at the University of Bristol working in the Smart Technology team.
 
-Answer the user's question using ONLY the context below. If the answer cannot be found in the context, tell the user that Regan has told you to say you don't know.
+Answer the user's question using ONLY the context below. If the answer cannot be found in the context, tell the user that you don't know.
 
 IMPORTANT DATE INFORMATION:
-- BMS/Operational documentation has a "last updated" date - this is when the technical documentation was last revised
+- Technical documentation (BMS/operational docs and Fire Risk Assessments) has a "last updated" date - this is when the documentation was last revised
 - Property/Planon data includes a property condition assessment date - this is when the building condition was assessed
-- For BMS/technical questions, ALWAYS reference the operational document's last updated date
+- For technical questions (BMS, fire safety, systems), ALWAYS reference the technical document's last updated date
 - The property condition assessment date is only relevant when discussing building condition or facilities
 
 DOCUMENT TYPES:
-- Property/Planon data provides: building characteristics, location, size, facilities manager, condition ratings, fire ratings
-- BMS/operational documentation provides: technical system details, control sequences, equipment specifications, operating procedures
-- When answering about BMS/technical systems, prioritise the operational documentation
+- Property/Planon data provides: building characteristics, location, size, facilities manager, condition ratings
+- Technical documentation provides: BMS system details, control sequences, equipment specifications, fire safety assessments, operating procedures
+- When answering about technical systems, prioritise the technical documentation
 - When answering about building properties/characteristics, prioritise the property data
 
 Question: {question}
@@ -445,7 +382,7 @@ Top Result Score: {top_result.get('score', 'Unknown'):.3f}
             model=ANSWER_MODEL,
             messages=[
                 {"role": "system",
-                 "content": "You are Alfred, a helpful assistant at the University of Bristol. When answering BMS/technical questions, ALWAYS use and reference the operational document's 'last updated' date as the primary date. The property condition assessment date is ONLY for building condition information, not for BMS/technical information. Clearly distinguish between these two date types in your responses, with operational doc date taking priority for technical questions."},
+                 "content": "You are Alfred, a helpful assistant at the University of Bristol. When answering technical questions (BMS, fire safety, systems), ALWAYS use and reference the technical document's 'last updated' date as the primary date. The property condition assessment date is ONLY for building condition information, not for technical information. Clearly distinguish between these two date types in your responses, with technical doc date taking priority for technical questions."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.2
@@ -465,7 +402,7 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
                                      building_groups: Dict[str, List[Dict[str, Any]]]) -> Tuple[str, str]:
     """
     Generate an answer specifically focused on a particular building with separate date tracking.
-    Uses highest-scoring operational doc for "last updated" date.
+    Uses highest-scoring operational_doc or fire_risk_assessment for "last updated" date.
     """
     # Get results specific to target building
     target_results = building_groups.get(target_building, [])
@@ -477,7 +414,6 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
     # Separate by document type - check metadata
     property_data = []
     operational_docs = []
-    fra_docs = []
 
     for r in target_results:
         metadata = r.get('metadata', {})
@@ -485,30 +421,17 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
 
         if doc_type == 'planon_data':
             property_data.append(r)
-        elif doc_type == 'operational_doc':
+        elif doc_type in ['operational_doc', 'fire_risk_assessment']:
             operational_docs.append(r)
-        elif doc_type == 'fire_risk_assessment':
-            fra_docs.append(r)
 
-    # Get dates by type - NOW RETURNS 5 VALUES
-    planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key = get_document_dates_by_type(
+    # Get dates by type - NOW RETURNS 3 VALUES
+    planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
         target_results)
 
     # Format date information
     date_context, publication_info = format_date_information(
-        planon_date, operational_date, operational_doc_key, fra_date, fra_doc_key
+        planon_date, operational_date, operational_doc_key
     )
-
-    # ... rest remains the same but update doc_summary
-    doc_summary = []
-    if property_data:
-        doc_summary.append(f"{len(property_data)} property/Planon record(s)")
-    if operational_docs:
-        doc_summary.append(
-            f"{len(operational_docs)} BMS/operational document(s)")
-    if fra_docs:
-        doc_summary.append(
-            f"{len(fra_docs)} fire risk assessment(s)")
 
     # Build grouped context
     context = build_building_grouped_context(target_results, max_chars=6000)
@@ -519,7 +442,7 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
         doc_summary.append(f"{len(property_data)} property/Planon record(s)")
     if operational_docs:
         doc_summary.append(
-            f"{len(operational_docs)} BMS/operational document(s)")
+            f"{len(operational_docs)} technical document(s)")
 
     doc_summary_str = " and ".join(doc_summary) if doc_summary else "documents"
 
@@ -528,15 +451,15 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
 Answer the user's question about **{target_building}** using ONLY the context below. The context includes {doc_summary_str} specific to this building.
 
 IMPORTANT DATE INFORMATION:
-- BMS/Operational documentation has a "last updated" date - use this for technical/BMS questions
+- Technical documentation has a "last updated" date - use this for technical/BMS/FRA questions
 - Property condition assessment date is only for building condition information
-- Always prioritise and mention the operational document's last updated date for BMS questions
+- Always prioritise and mention the technical document's last updated date for technical questions
 
 DOCUMENT TYPES:
 - Property/Planon data provides building characteristics, conditions, and facilities information
-- BMS/operational documentation provides technical system details and operating procedures
+- Technical documentation provides BMS system details, fire risk assessments, and operating procedures
 - Focus your answer specifically on {target_building}
-- Clearly distinguish between property/Planon data and BMS/operational documentation
+- Clearly distinguish between property/Planon data and technical documentation
 
 Question: {question}
 
@@ -552,7 +475,7 @@ Context: {context}
             model=ANSWER_MODEL,
             messages=[
                 {"role": "system",
-                 "content": f"You are Alfred, a helpful assistant. You are answering specifically about {target_building}. When answering BMS/technical questions, ALWAYS use the operational document's 'last updated' date. The property condition assessment date is ONLY for building condition information. Always distinguish between property/Planon data (building information, conditions, facilities) and BMS/operational documentation (technical systems, controls). Include appropriate date information based on the question type, prioritizing operational doc dates for technical questions."},
+                 "content": f"You are Alfred, a helpful assistant. You are answering specifically about {target_building}. When answering technical questions (BMS, fire safety, systems), ALWAYS use the technical document's 'last updated' date. The property condition assessment date is ONLY for building condition information. Always distinguish between property/Planon data (building information, conditions, facilities) and technical documentation (BMS systems, controls, fire safety). Include appropriate date information based on the question type, prioritizing technical doc dates for technical questions."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.2
@@ -566,7 +489,7 @@ Context: {context}
         if property_data:
             answer += f"\n- Property/Planon data: {len(property_data)} record(s)"
         if operational_docs:
-            answer += f"\n- BMS/Operational documents: {len(operational_docs)} document(s)"
+            answer += f"\n- Technical documents: {len(operational_docs)} document(s)"
 
         return answer, publication_info
     except Exception as e:
@@ -605,8 +528,8 @@ IMPORTANT:
 - Organise your answer by building
 - Highlight similarities and differences
 - Be clear about which information applies to which building
-- Distinguish between property data and BMS/operational data where relevant
-- When referencing dates, be clear about whether they're operational doc dates or assessment dates
+- Distinguish between property data and technical documentation where relevant
+- When referencing dates, be clear about whether they're technical doc dates or assessment dates
 
 Question: {question}
 
@@ -618,7 +541,7 @@ Context: {context}
             model=ANSWER_MODEL,
             messages=[
                 {"role": "system",
-                 "content": "You are Alfred, a helpful assistant. You are comparing information across multiple buildings. Organise by building and be clear about differences. Distinguish between operational document dates and property assessment dates."},
+                 "content": "You are Alfred, a helpful assistant. You are comparing information across multiple buildings. Organise by building and be clear about differences. Distinguish between technical document dates and property assessment dates."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3

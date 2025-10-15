@@ -5,7 +5,6 @@ import json
 import re
 import hashlib
 import time
-import math
 import random
 import argparse
 import logging
@@ -22,7 +21,7 @@ import pandas as pd
 import tiktoken
 from dotenv import load_dotenv
 
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec  # pylint: disable=no-name-in-module
 from openai import OpenAI
 from openai import APIError, RateLimitError
 
@@ -169,9 +168,9 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
         if building.lower() in extracted_name.lower():
             return building
 
-    # Strategy 4: Use difflib for fuzzy match (60% similarity threshold)
+    # Strategy 4: Use difflib for fuzzy match (80% similarity threshold)
     matches = get_close_matches(
-        extracted_name, known_buildings, n=1, cutoff=0.6)
+        extracted_name, known_buildings, n=1, cutoff=0.8)
     if matches:
         return matches[0]
 
@@ -182,24 +181,35 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
 def extract_building_name_from_filename(filename: str, known_buildings: Optional[List[str]] = None) -> str:
     """
     Extract building name from PDF/DOCX filename with improved accuracy.
-    Handles both standard BMS documents and Fire Risk Assessments.
-
-    Examples: 
-    - 'UoB-Senate-House-BMS-Controls-Basement-Panel.pdf' -> 'Senate House'
-    - 'FM-FRA-SenateHouse-2025-03.docx' -> 'Senate House'
+    Handles multiple FRA naming patterns and BMS documents.
     """
     # Remove path and extension
     name = os.path.basename(filename)
     name = name.replace('.pdf', '').replace('.docx', '').replace('.doc', '')
 
-    # Handle Fire Risk Assessment naming pattern
-    # Pattern: FM-FRA-BuildingName-YYYY-MM or similar
+    # Handle Fire Risk Assessment naming patterns
+    # Pattern 1: FM-FRA-BuildingName-YYYY-MM
     fra_match = re.match(r'(?:FM-)?FRA-(.+?)-\d{4}-\d{2}', name, re.IGNORECASE)
     if fra_match:
         building_part = fra_match.group(1)
         # Convert camelCase or PascalCase to spaced format
-        # SenateHouse -> Senate House
         building_part = re.sub(r'([a-z])([A-Z])', r'\1 \2', building_part)
+        building_part = re.sub(r'(\d)([A-Z])', r'\1 \2', building_part)
+        name = building_part
+
+    # Pattern 2: SRL-FRA-BuildingName-YYYY-MM (older checksheet style)
+    srl_match = re.match(r'SRL-FRA-(.+?)-\d{4}-\d{2}', name, re.IGNORECASE)
+    if srl_match:
+        building_part = srl_match.group(1)
+        building_part = re.sub(r'([a-z])([A-Z])', r'\1 \2', building_part)
+        building_part = re.sub(r'(\d)([A-Z])', r'\1 \2', building_part)
+        name = building_part
+
+    # Handle BMS documents
+    # Pattern: UoB-BuildingName-BMS-...
+    bms_match = re.match(r'UoB-(.+?)-BMS', name, re.IGNORECASE)
+    if bms_match:
+        building_part = bms_match.group(1)
         name = building_part
 
     # Remove UoB prefix for standard documents
@@ -212,6 +222,7 @@ def extract_building_name_from_filename(filename: str, known_buildings: Optional
         r'-O&M.*$',
         r'-OM.*$',
         r'-Des-Ops.*$',
+        r'-DesOps.*$',
         r'-Prototype.*$',
         r'-Manual.*$',
         r'-Rev\d+.*$',
@@ -222,7 +233,8 @@ def extract_building_name_from_filename(filename: str, known_buildings: Optional
         r'-iiq.*$',
         r'-trend.*$',
         r'-AC-to.*$',
-        r'-FRA.*$',  # Remove FRA suffix if present
+        r'-FRA.*$',
+        r'-SRL.*$',
     ]
 
     for pattern in patterns_to_remove:
@@ -234,7 +246,7 @@ def extract_building_name_from_filename(filename: str, known_buildings: Optional
     # Clean up multiple spaces and trim
     name = re.sub(r'\s+', ' ', name).strip()
 
-    # Capitalize properly (handles cases like "senate house" -> "Senate House")
+    # Capitalize properly
     name = ' '.join(word.capitalize() for word in name.split())
 
     # If we have known buildings, try to match using fuzzy matching
@@ -247,60 +259,24 @@ def extract_building_name_from_filename(filename: str, known_buildings: Optional
     return name
 
 
-def extract_fra_date_from_text(text: str) -> Optional[str]:
-    """
-    Extract the FRA assessment date from document text.
-    Works with both narrative text and table formats.
-    """
-    patterns = [
-        # Table format: "Date of fire risk assessment: | 31 March 2025 – NON-INTRUSIVE FRA."
-        r'Date of fire risk assessment[:\s|]+([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})',
-
-        # With dash/hyphen after date
-        r'([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})\s*[–—-]\s*(?:NON-INTRUSIVE|INTRUSIVE)?(?:\s*FRA)?',
-
-        # Alternative patterns
-        r'Assessment date[:\s|]+([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})',
-        r'Date[:\s|]+([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})',
-    ]
-
-    # Search through first 8000 characters (tables can be verbose)
-    search_text = text[:8000] if len(text) > 8000 else text
-
-    # Also try to find it in lines that contain "Date of fire risk assessment"
-    for line in search_text.split('\n')[:100]:  # First 100 lines
-        if 'date of fire risk assessment' in line.lower():
-            # Extract any date from this line
-            date_match = re.search(
-                r'([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})', line)
-            if date_match:
-                date_found = date_match.group(1)
-                logging.info(
-                    f"✓ Found FRA date in line: {line[:80]}... -> {date_found}")
-                return date_found
-
-    # Try all patterns
-    for pattern in patterns:
-        match = re.search(pattern, search_text, re.IGNORECASE)
-        if match:
-            date_found = match.group(1)
-            logging.info(f"✓ Extracted FRA date: {date_found}")
-            return date_found
-
-    # Log if no date found with sample text
-    sample = search_text[:500].replace('\n', ' ')
-    logging.warning(f"✗ Could not extract FRA date. Sample text: {sample}")
-    return None
-
-
 def is_fire_risk_assessment(key: str, text: str = "") -> bool:
     """
     Determine if a document is a Fire Risk Assessment.
-    Checks filename and content.
+    Checks filename and content for multiple patterns.
     """
     # Check filename patterns
     key_lower = key.lower()
-    if 'fra' in key_lower or 'fire-risk' in key_lower or 'fire_risk' in key_lower:
+
+    # Common FRA filename patterns
+    fra_patterns = [
+        'fra',
+        'fire-risk',
+        'fire_risk',
+        'srl-fra',
+        'fm-fra',
+    ]
+
+    if any(pattern in key_lower for pattern in fra_patterns):
         return True
 
     # Check content for FRA indicators
@@ -309,11 +285,57 @@ def is_fire_risk_assessment(key: str, text: str = "") -> bool:
             'fire risk assessment',
             'regulatory reform (fire safety) order',
             'fire safety order',
-            'assessment date',
-            'risk level indicator'
+            'date of fire risk assessment',
+            'risk level indicator',
+            'fire checksheet',
+            'bristol university fire checksheet',
+            'date of inspection',
+            'recommended reinspection date',
         ]
-        text_lower = text[:2000].lower()  # Check first 2000 chars
+        text_lower = text[:3000].lower()
         if any(indicator in text_lower for indicator in fra_indicators):
+            return True
+
+    return False
+
+
+def is_bms_document(key: str, text: str = "") -> bool:
+    """
+    Determine if a document is a BMS document.
+    Checks filename and content for BMS patterns.
+    """
+    key_lower = key.lower()
+
+    # Check filename for BMS indicators
+    bms_patterns = [
+        'bms',
+        'building management',
+        'desops',
+        'description of operation',
+        'o&m',
+        'operation & maintenance',
+    ]
+
+    if any(pattern in key_lower for pattern in bms_patterns):
+        return True
+
+    # Check content for BMS indicators
+    if text:
+        bms_indicators = [
+            'building management system',
+            'bms',
+            'trend',
+            'iq4',
+            'controller',
+            'ahu',
+            'air handling unit',
+            'hvac',
+        ]
+        text_lower = text[:3000].lower()
+        # Need at least 2 indicators to be confident
+        matches = sum(
+            1 for indicator in bms_indicators if indicator in text_lower)
+        if matches >= 2:
             return True
 
     return False
@@ -455,33 +477,6 @@ def upsert_vectors(vectors: List[Tuple[str, List[float], Dict]]):
                 backoff_sleep(attempt)
 
 
-def test_building_name_extraction(known_buildings: Optional[List[str]] = None):
-    """Test building name extraction with sample filenames."""
-    test_cases = [
-        ("UoB-Senate-House-BMS-Controls-Basement-Panel.pdf", "Senate House"),
-        ("FM-FRA-SenateHouse-2025-03.docx", "Senate House"),
-        ("FM-FRA-1-9OldParkHill-2024-05.pdf", "1 9 Old Park Hill"),
-        ("UoB-Berkeley-Square.pdf", "Berkeley Square"),
-        ("UoB-Dentistry-BMS-P7391-OM-As-Installed.pdf", "Dentistry"),
-        ("UoB-Retort-House-BMS-O&M-Manual-rev1.pdf", "Retort House"),
-    ]
-
-    logging.info("=" * 60)
-    logging.info("Testing building name extraction:")
-    logging.info("=" * 60)
-
-    for filename, expected in test_cases:
-        result = extract_building_name_from_filename(filename, known_buildings)
-        status = "✓" if result == expected else "✗"
-        logging.info(f"{status} {filename}")
-        logging.info(f"  Result: '{result}' | Expected: '{expected}'")
-        if result != expected:
-            logging.info(f"  MISMATCH!")
-        logging.info("")
-
-    logging.info("=" * 60)
-
-
 # ---------------- Main ingest ----------------
 
 
@@ -498,10 +493,6 @@ def ingest_bucket(bucket: str, prefix: str = ""):
             csv_key = o['Key']
             known_buildings = load_building_names_from_csv(bucket, csv_key)
             break
-
-    # Run test if buildings were loaded
-    if known_buildings:
-        test_building_name_extraction(known_buildings)
 
     pending: List[Tuple[str, List[float], Dict]] = []
 
@@ -599,22 +590,22 @@ def ingest_bucket(bucket: str, prefix: str = ""):
         logging.info(
             f"[2/5] Extracted ~{len(text)} chars in {t_extract:.2f}s; chunking…")
 
-        # Determine if this is a Fire Risk Assessment
+        # Determine document type
         is_fra = is_fire_risk_assessment(key, text)
-        doc_type = "fire_risk_assessment" if is_fra else "operational_doc"
+        is_bms = is_bms_document(key, text)
+
+        if is_fra:
+            doc_type = "fire_risk_assessment"
+        elif is_bms:
+            doc_type = "operational_doc"
+        else:
+            doc_type = "unknown"
 
         # Extract building name from filename with fuzzy matching
         building_name = extract_building_name_from_filename(
             key, known_buildings)
         logging.info(f"Extracted building name: '{building_name}' from {key}")
         logging.info(f"Document type: {doc_type}")
-
-        # Extract FRA date if applicable
-        fra_date = None
-        if is_fra:
-            fra_date = extract_fra_date_from_text(text)
-            if fra_date:
-                logging.info(f"Extracted FRA date: {fra_date}")
 
         t2 = time.time()
         chunks = chunk_text(text)
@@ -647,10 +638,6 @@ def ingest_bucket(bucket: str, prefix: str = ""):
                     "document_type": doc_type
                 }
 
-                # Add FRA-specific metadata
-                if is_fra and fra_date:
-                    metadata["fra_date"] = fra_date
-
                 pending.append((cid, emb, metadata))
 
             if len(pending) >= UPSERT_BATCH:
@@ -681,17 +668,9 @@ def parse_args():
     p.add_argument("--bucket", default=DEFAULT_BUCKET, help="S3 bucket name")
     p.add_argument("--prefix", default=DEFAULT_PREFIX,
                    help="S3 key prefix (folder)")
-    p.add_argument("--test-extraction", action="store_true",
-                   help="Run building name extraction tests only")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-
-    if args.test_extraction:
-        # Just run the tests without ingestion
-        logging.info("Running extraction tests only...")
-        test_building_name_extraction()
-    else:
-        ingest_bucket(args.bucket, args.prefix)
+    ingest_bucket(args.bucket, args.prefix)

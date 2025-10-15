@@ -5,7 +5,6 @@ import json
 import re
 import hashlib
 import time
-import math
 import random
 import argparse
 import logging
@@ -47,7 +46,7 @@ if not OPENAI_API_KEY:
 # -------------- Config (edit or override via env/CLI) --------------
 DEFAULT_BUCKET = os.getenv("BUCKET", "desopsus")
 DEFAULT_PREFIX = os.getenv("PREFIX", "")
-INDEX_NAME = os.getenv("INDEX_NAME", "bms")
+INDEX_NAME = os.getenv("INDEX_NAME", "operational-docs")
 NAMESPACE = os.getenv("NAMESPACE") or None
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
 DIMENSION = int(os.getenv("DIMENSION", "1536"))
@@ -169,9 +168,9 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
         if building.lower() in extracted_name.lower():
             return building
 
-    # Strategy 4: Use difflib for fuzzy match (60% similarity threshold)
+    # Strategy 4: Use difflib for fuzzy match (80% similarity threshold)
     matches = get_close_matches(
-        extracted_name, known_buildings, n=1, cutoff=0.6)
+        extracted_name, known_buildings, n=1, cutoff=0.8)
     if matches:
         return matches[0]
 
@@ -182,34 +181,60 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
 def extract_building_name_from_filename(filename: str, known_buildings: Optional[List[str]] = None) -> str:
     """
     Extract building name from PDF/DOCX filename with improved accuracy.
-    Removes operational suffixes and optionally uses fuzzy matching.
-
-    Example: 'UoB-Senate-House-BMS-Controls-Basement-Panel.pdf' -> 'Senate House'
+    Handles multiple FRA naming patterns and BMS documents.
     """
     # Remove path and extension
     name = os.path.basename(filename)
     name = name.replace('.pdf', '').replace('.docx', '').replace('.doc', '')
 
-    # Remove UoB prefix
+    # Handle Fire Risk Assessment naming patterns
+    # Pattern 1: FM-FRA-BuildingName-YYYY-MM
+    fra_match = re.match(r'(?:FM-)?FRA-(.+?)-\d{4}-\d{2}', name, re.IGNORECASE)
+    if fra_match:
+        building_part = fra_match.group(1)
+        # Convert camelCase or PascalCase to spaced format
+        building_part = re.sub(r'([a-z])([A-Z])', r'\1 \2', building_part)
+        building_part = re.sub(r'(\d)([A-Z])', r'\1 \2', building_part)
+        name = building_part
+
+    # Pattern 2: SRL-FRA-BuildingName-YYYY-MM (older checksheet style)
+    srl_match = re.match(r'SRL-FRA-(.+?)-\d{4}-\d{2}', name, re.IGNORECASE)
+    if srl_match:
+        building_part = srl_match.group(1)
+        building_part = re.sub(r'([a-z])([A-Z])', r'\1 \2', building_part)
+        building_part = re.sub(r'(\d)([A-Z])', r'\1 \2', building_part)
+        name = building_part
+
+    # Handle BMS documents
+    # Pattern: UoB-BuildingName-BMS-...
+    bms_match = re.match(r'UoB-(.+?)-BMS', name, re.IGNORECASE)
+    if bms_match:
+        building_part = bms_match.group(1)
+        name = building_part
+
+    # Remove UoB prefix for standard documents
     name = name.replace('UoB-', '')
 
     # Generic patterns: remove common technical terms and suffixes
     patterns_to_remove = [
-        r'-BMS.*$',              # Remove anything after -BMS
-        r'-Controls.*$',         # Remove anything after -Controls
-        r'-O&M.*$',              # Remove O&M manual references
-        r'-OM.*$',               # Remove OM manual references
-        r'-Des-Ops.*$',          # Remove Des-Ops references
-        r'-Prototype.*$',        # Remove prototype lab references
-        r'-Manual.*$',           # Remove manual references
-        r'-Rev\d+.*$',           # Remove revision numbers (Rev1, Rev2, etc.)
-        r'-rev\d+.*$',           # Remove lowercase revision numbers
-        r'-P\d+.*$',             # Remove P numbers (P7391, etc.)
-        r'-As-Installed.*$',     # Remove As-Installed suffix
-        r'-Project.*$',          # Remove Project suffix
-        r'-iiq.*$',              # Remove iiq suffix
-        r'-trend.*$',            # Remove trend suffix
-        r'-AC-to.*$',            # Remove AC-to prefix
+        r'-BMS.*$',
+        r'-Controls.*$',
+        r'-O&M.*$',
+        r'-OM.*$',
+        r'-Des-Ops.*$',
+        r'-DesOps.*$',
+        r'-Prototype.*$',
+        r'-Manual.*$',
+        r'-Rev\d+.*$',
+        r'-rev\d+.*$',
+        r'-P\d+.*$',
+        r'-As-Installed.*$',
+        r'-Project.*$',
+        r'-iiq.*$',
+        r'-trend.*$',
+        r'-AC-to.*$',
+        r'-FRA.*$',
+        r'-SRL.*$',
     ]
 
     for pattern in patterns_to_remove:
@@ -221,7 +246,7 @@ def extract_building_name_from_filename(filename: str, known_buildings: Optional
     # Clean up multiple spaces and trim
     name = re.sub(r'\s+', ' ', name).strip()
 
-    # Capitalise properly (handles cases like "senate house" -> "Senate House")
+    # Capitalize properly
     name = ' '.join(word.capitalize() for word in name.split())
 
     # If we have known buildings, try to match using fuzzy matching
@@ -232,6 +257,88 @@ def extract_building_name_from_filename(filename: str, known_buildings: Optional
             return matched_name
 
     return name
+
+
+def is_fire_risk_assessment(key: str, text: str = "") -> bool:
+    """
+    Determine if a document is a Fire Risk Assessment.
+    Checks filename and content for multiple patterns.
+    """
+    # Check filename patterns
+    key_lower = key.lower()
+
+    # Common FRA filename patterns
+    fra_patterns = [
+        'fra',
+        'fire-risk',
+        'fire_risk',
+        'srl-fra',
+        'fm-fra',
+    ]
+
+    if any(pattern in key_lower for pattern in fra_patterns):
+        return True
+
+    # Check content for FRA indicators
+    if text:
+        fra_indicators = [
+            'fire risk assessment',
+            'regulatory reform (fire safety) order',
+            'fire safety order',
+            'date of fire risk assessment',
+            'risk level indicator',
+            'fire checksheet',
+            'bristol university fire checksheet',
+            'date of inspection',
+            'recommended reinspection date',
+        ]
+        text_lower = text[:3000].lower()
+        if any(indicator in text_lower for indicator in fra_indicators):
+            return True
+
+    return False
+
+
+def is_bms_document(key: str, text: str = "") -> bool:
+    """
+    Determine if a document is a BMS document.
+    Checks filename and content for BMS patterns.
+    """
+    key_lower = key.lower()
+
+    # Check filename for BMS indicators
+    bms_patterns = [
+        'bms',
+        'building management',
+        'desops',
+        'description of operation',
+        'o&m',
+        'operation & maintenance',
+    ]
+
+    if any(pattern in key_lower for pattern in bms_patterns):
+        return True
+
+    # Check content for BMS indicators
+    if text:
+        bms_indicators = [
+            'building management system',
+            'bms',
+            'trend',
+            'iq4',
+            'controller',
+            'ahu',
+            'air handling unit',
+            'hvac',
+        ]
+        text_lower = text[:3000].lower()
+        # Need at least 2 indicators to be confident
+        matches = sum(
+            1 for indicator in bms_indicators if indicator in text_lower)
+        if matches >= 2:
+            return True
+
+    return False
 
 
 def extract_text_csv_by_building(key: str, data: bytes) -> List[Tuple[str, str, str]]:
@@ -370,35 +477,6 @@ def upsert_vectors(vectors: List[Tuple[str, List[float], Dict]]):
                 backoff_sleep(attempt)
 
 
-def test_building_name_extraction(known_buildings: Optional[List[str]] = None):
-    """Test building name extraction with sample filenames."""
-    test_cases = [
-        ("UoB-Senate-House-BMS-Controls-Basement-Panel.pdf", "Senate House"),
-        ("UoB-Berkeley-Square.pdf", "Berkeley Square"),
-        ("UoB-Dentistry-BMS-P7391-OM-As-Installed.pdf", "Dentistry"),
-        ("UoB-Retort-House-BMS-O&M-Manual-rev1.pdf", "Retort House"),
-        ("UoB-Whiteladies-Project-BMS-O&M-Manual.pdf", "Whiteladies"),
-        ("UoB-Indoor-Sports-Hall.docx", "Indoor Sports Hall"),
-        ("mitsubishi-ac-to-trend-iiq-interface.pdf",
-         "Mitsubishi Ac To Trend Iiq Interface"),
-    ]
-
-    logging.info("=" * 60)
-    logging.info("Testing building name extraction:")
-    logging.info("=" * 60)
-
-    for filename, expected in test_cases:
-        result = extract_building_name_from_filename(filename, known_buildings)
-        status = "✓" if result == expected else "✗"
-        logging.info(f"{status} {filename}")
-        logging.info(f"  Result: '{result}' | Expected: '{expected}'")
-        if result != expected:
-            logging.info(f"  MISMATCH!")
-        logging.info("")
-
-    logging.info("=" * 60)
-
-
 # ---------------- Main ingest ----------------
 
 
@@ -415,10 +493,6 @@ def ingest_bucket(bucket: str, prefix: str = ""):
             csv_key = o['Key']
             known_buildings = load_building_names_from_csv(bucket, csv_key)
             break
-
-    # Run test if buildings were loaded
-    if known_buildings:
-        test_building_name_extraction(known_buildings)
 
     pending: List[Tuple[str, List[float], Dict]] = []
 
@@ -477,16 +551,16 @@ def ingest_bucket(bucket: str, prefix: str = ""):
                         cid = make_id(bucket, building_key, i + j)
                         metadata = {
                             "bucket": bucket,
-                            "key": building_key,  # Building-specific key
-                            "building_name": building_name,  # Searchable field
-                            "original_file": key,  # Reference to source CSV
+                            "key": building_key,
+                            "building_name": building_name,
+                            "original_file": key,
                             "chunk": i + j,
                             "source": f"s3://{bucket}/{key}",
                             "size": size,
                             "last_modified": last_modified.isoformat() if isinstance(last_modified, datetime) else str(last_modified),
                             "ext": "csv",
                             "text": chunk_str,
-                            "document_type": "planon_data"  # Tag for filtering
+                            "document_type": "planon_data"
                         }
                         pending.append((cid, emb, metadata))
 
@@ -503,7 +577,7 @@ def ingest_bucket(bucket: str, prefix: str = ""):
 
             logging.info(
                 f"Finished CSV file: {key} in {time.time()-t0:.2f}s total")
-            continue  # Skip to next file
+            continue
 
         # ===== STANDARD DOCUMENT PROCESSING (PDF, DOCX, etc.) =====
         t1 = time.time()
@@ -516,15 +590,27 @@ def ingest_bucket(bucket: str, prefix: str = ""):
         logging.info(
             f"[2/5] Extracted ~{len(text)} chars in {t_extract:.2f}s; chunking…")
 
-        t2 = time.time()
-        chunks = chunk_text(text)
-        logging.info(
-            f"[3/5] {key}: {len(chunks)} chunks (chunk={CHUNK_TOKENS}, overlap={CHUNK_OVERLAP}) in {time.time()-t2:.2f}s")
+        # Determine document type
+        is_fra = is_fire_risk_assessment(key, text)
+        is_bms = is_bms_document(key, text)
+
+        if is_fra:
+            doc_type = "fire_risk_assessment"
+        elif is_bms:
+            doc_type = "operational_doc"
+        else:
+            doc_type = "unknown"
 
         # Extract building name from filename with fuzzy matching
         building_name = extract_building_name_from_filename(
             key, known_buildings)
         logging.info(f"Extracted building name: '{building_name}' from {key}")
+        logging.info(f"Document type: {doc_type}")
+
+        t2 = time.time()
+        chunks = chunk_text(text)
+        logging.info(
+            f"[3/5] {key}: {len(chunks)} chunks (chunk={CHUNK_TOKENS}, overlap={CHUNK_OVERLAP}) in {time.time()-t2:.2f}s")
 
         # embed in batches
         for i in range(0, len(chunks), EMBED_BATCH):
@@ -541,7 +627,7 @@ def ingest_bucket(bucket: str, prefix: str = ""):
                 metadata = {
                     "bucket": bucket,
                     "key": key,
-                    "building_name": building_name,  # Add building name for cross-reference
+                    "building_name": building_name,
                     "original_file": key,
                     "chunk": i + j,
                     "source": f"s3://{bucket}/{key}",
@@ -549,8 +635,9 @@ def ingest_bucket(bucket: str, prefix: str = ""):
                     "last_modified": last_modified.isoformat() if isinstance(last_modified, datetime) else str(last_modified),
                     "ext": ext(key),
                     "text": chunk_str,
-                    "document_type": "operational_doc"  # Tag for filtering
+                    "document_type": doc_type
                 }
+
                 pending.append((cid, emb, metadata))
 
             if len(pending) >= UPSERT_BATCH:
@@ -581,17 +668,9 @@ def parse_args():
     p.add_argument("--bucket", default=DEFAULT_BUCKET, help="S3 bucket name")
     p.add_argument("--prefix", default=DEFAULT_PREFIX,
                    help="S3 key prefix (folder)")
-    p.add_argument("--test-extraction", action="store_true",
-                   help="Run building name extraction tests only")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-
-    if args.test_extraction:
-        # Just run the tests without ingestion
-        logging.info("Running extraction tests only...")
-        test_building_name_extraction()
-    else:
-        ingest_bucket(args.bucket, args.prefix)
+    ingest_bucket(args.bucket, args.prefix)

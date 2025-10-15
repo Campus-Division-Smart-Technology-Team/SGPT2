@@ -15,7 +15,7 @@ class QueryClassifier:
     # Patterns that don't require search
     GREETING_PATTERNS = [
         r'^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening)|howdy)[\s!.,]*$',
-        r'^(hi|hello|hey)\s+alfred[\s!.,]*$',
+        r'^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening)|howdy)\s+alfred[\s!.,]*$',
         r'^alfred[\s!.,]*$'
     ]
 
@@ -38,7 +38,9 @@ class QueryClassifier:
 
     FAREWELL_PATTERNS = [
         r'^(bye|goodbye|see\s+you|farewell|take\s+care|have\s+a\s+good\s+day)[\s!.,]*$',
-        r'^(thanks\s+and\s+bye|bye\s+for\s+now)[\s!.,]*$'
+        r'^(thanks\s+and\s+bye|bye\s+for\s+now)[\s!.,]*$',
+        r'^(bye|goodbye|see\s+you|farewell|take\s+care|have\s+a\s+good\s+day)\s+alfred[\s!.,]*$',
+        r'^alfred\s+(bye|goodbye|see\s+you|farewell|take\s+care|have\s+a\s+good\s+day)[\s!.,]*$'
     ]
 
     @classmethod
@@ -79,9 +81,9 @@ class QueryClassifier:
     def get_greeting_response() -> str:
         """Return a greeting response."""
         greetings = [
-            "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• 🍎 Apples (the fruit) and Apple Inc.\n\n• 🏢 Building Management Systems (BMS)\n\nWhat would you like to know today?",
-            "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about apples or BMS systems. How can I assist you?",
-            "Hello! Alfred here, your University of Bristol assistant. I have access to information about apples and building management systems. What can I help you with?"
+            "Hello! I'm Alfred 🦍, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• 🍎 Apples (the fruit) and Apple Inc.\n\n• 🏢 Building Management Systems (BMS)\n\n• 🔥 Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
+            "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about apples, BMS and FRAs. How can I assist you?",
+            "Hello! Alfred here, your University of Bristol assistant. I have access to information about apples, building management systems and Fire Risk Assessments. What can I help you with?"
         ]
         return random.choice(greetings)
 
@@ -94,7 +96,7 @@ class QueryClassifier:
         **What I can do:**
         - Search and retrieve information from our knowledge bases
         - Answer questions about apples (both the fruit and Apple Inc.)
-        - Provide information about Building Management Systems (BMS) at the university
+        - Provide information about Building Management Systems (BMS) and Fire Risk Assessments (FRAs) at the university
         - Tell you when documents were last updated or published
         
         **How to use me:**
