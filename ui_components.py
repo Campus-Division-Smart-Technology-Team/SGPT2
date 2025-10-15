@@ -141,8 +141,8 @@ def render_tabs():
                 - "Tell me about the different types of apples"
 
                 **FRA topics:**
-                - "What is the maximum staff/visitors occupancy for Senate House?"
-                - "How many floors does 1 Catheral Square have?"
+                - "How many staff or visitors can Senate House accommodate?"
+                - "How many floors does 1 Cathedral Square have?"
                 - "List the fire risks at 1-9 Old Park Hill?"
                 """
             )
