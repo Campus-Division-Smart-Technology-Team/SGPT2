@@ -13,7 +13,7 @@ class BusinessTermMapper:
 
     # Core terminology mappings
     TERM_MAPPINGS = {
-        'FRA': {
+        'fra': {
             'full_name': 'Fire Risk Assessment',
             'document_type': 'fire_risk_assessment',
             'search_terms': ['fire risk assessment', 'fire safety', 'FRA', 'fire assessment'],
