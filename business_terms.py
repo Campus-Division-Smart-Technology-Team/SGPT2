@@ -26,7 +26,7 @@ class BusinessTermMapper:
             'search_terms': ['air handling unit', 'AHU', 'air handler'],
             'description': 'HVAC air distribution equipment'
         },
-        'BMS': {
+        'bms': {
             'full_name': 'Building Management System',
             'document_type': 'operational_doc',
             'search_terms': ['building management system', 'BMS', 'controls'],
