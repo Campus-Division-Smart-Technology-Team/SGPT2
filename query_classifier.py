@@ -6,7 +6,10 @@ Query classification to determine if queries need search or direct response.
 
 import re
 import random
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
+
+from building_utils import extract_building_from_query
+from business_terms import BusinessTermMapper
 
 
 class QueryClassifier:
@@ -143,3 +146,41 @@ def should_search_index(query: str) -> Tuple[bool, Optional[str]]:
         return True, None
     else:
         return False, suggested_response
+
+
+def parse_user_intent(query: str) -> Dict[str, Any]:
+    """
+    Parse user query to extract intent, building, document type, and action.
+    """
+    intent = {
+        'action': None,  # 'summarise', 'list', 'find', 'compare'
+        'building': None,
+        'document_type': None,
+        'business_terms': [],
+        'original_query': query
+    }
+
+    # Detect action verbs
+    action_patterns = {
+        'summarise': r'\b(summarise|summarise|summary|overview)\b',
+        'list': r'\b(list|show|display|what are)\b',
+        'find': r'\b(find|search|locate|where|get)\b',
+        'compare': r'\b(compare|difference|versus|vs)\b'
+    }
+
+    for action, pattern in action_patterns.items():
+        if re.search(pattern, query.lower()):
+            intent['action'] = action
+            break
+
+    # Extract building
+    intent['building'] = extract_building_from_query(query)
+
+    # Detect business terms
+    term_mappings = BusinessTermMapper.detect_business_terms(query)
+    if term_mappings:
+        intent['business_terms'] = term_mappings
+        # Set document type from first detected term
+        intent['document_type'] = term_mappings[0]['document_type']
+
+    return intent

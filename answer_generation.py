@@ -313,7 +313,7 @@ def build_building_grouped_context(results: List[Dict[str, Any]],
 
 
 def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
-                                     all_results: List[Dict[str, Any]]) -> Tuple[str, str]:
+                                     all_results: List[Dict[str, Any]], term_context: Dict = None) -> Tuple[str, str]:
     """
     Generate an answer that includes separate date information for Planon and operational docs.
     """
@@ -351,9 +351,22 @@ def enhanced_answer_with_source_date(question: str, top_result: Dict[str, Any],
 
     context = build_context(snippets, prioritise_building=True)
 
+    # Add term context to prompt if available
+    term_explanation = ""
+    if term_context:
+        explanations = []
+        for term, info in term_context.items():
+            explanations.append(
+                f"- {term.upper()}: {info['full_name']} - {info['description']}"
+            )
+        term_explanation = "\nRELEVANT TERMINOLOGY:\n" + \
+            "\n".join(explanations) + "\n"
+
     prompt = f"""Your name is Alfred, a helpful assistant at the University of Bristol working in the Smart Technology team.
 
 Answer the user's question using ONLY the context below. If the answer cannot be found in the context, tell the user that you don't know.
+
+{term_explanation}
 
 IMPORTANT DATE INFORMATION:
 - Technical documentation (BMS/operational docs and Fire Risk Assessments) has a "last updated" date - this is when the documentation was last revised
@@ -399,7 +412,9 @@ Top Result Score: {top_result.get('score', 'Unknown'):.3f}
 def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
                                      all_results: List[Dict[str, Any]],
                                      target_building: str,
-                                     building_groups: Dict[str, List[Dict[str, Any]]]) -> Tuple[str, str]:
+                                     building_groups: Dict[str, List[Dict[str, Any]]],
+                                     term_context: Dict = None) -> Tuple[str, str]:
+    # Add the term explanation logic like in enhanced_answer_with_source_date
     """
     Generate an answer specifically focused on a particular building with separate date tracking.
     Uses highest-scoring operational_doc or fire_risk_assessment for "last updated" date.
@@ -445,11 +460,22 @@ def generate_building_focused_answer(question: str, top_result: Dict[str, Any],
             f"{len(operational_docs)} technical document(s)")
 
     doc_summary_str = " and ".join(doc_summary) if doc_summary else "documents"
+    # Add term explanation like in enhanced_answer_with_source_date
+    term_explanation = ""
+    if term_context:
+        explanations = []
+        for term, info in term_context.items():
+            explanations.append(
+                f"- {term.upper()}: {info['full_name']} - {info['description']}"
+            )
+        term_explanation = "\nRELEVANT TERMINOLOGY:\n" + \
+            "\n".join(explanations) + "\n"
 
     prompt = f"""Your name is Alfred, a helpful assistant at the University of Bristol working in the Smart Technology team.
 
 Answer the user's question about **{target_building}** using ONLY the context below. The context includes {doc_summary_str} specific to this building.
 
+{term_explanation}
 IMPORTANT DATE INFORMATION:
 - Technical documentation has a "last updated" date - use this for technical/BMS/FRA questions
 - Property condition assessment date is only for building condition information

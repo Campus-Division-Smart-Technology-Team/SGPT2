@@ -86,9 +86,9 @@ def find_closest_building_name(extracted_name: str, known_buildings: List[str]) 
         if building.lower() in extracted_name.lower():
             return building
 
-    # Strategy 4: Fuzzy match using difflib (60% similarity)
+    # Strategy 4: Fuzzy match using difflib (80% similarity)
     matches = get_close_matches(
-        extracted_name, known_buildings, n=1, cutoff=0.60)
+        extracted_name, known_buildings, n=1, cutoff=0.80)
     if matches:
         return matches[0]
 
