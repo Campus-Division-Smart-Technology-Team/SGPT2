@@ -143,7 +143,7 @@ def render_tabs():
                 **FRA topics:**
                 - "How many staff or visitors can Senate House accommodate?"
                 - "How many floors does 1 Cathedral Square have?"
-                - "List the fire risks at 1-9 Old Park Hill?"
+                - "List the fire risks at 1-9 Old Park Hill"
                 """
             )
         with col2:

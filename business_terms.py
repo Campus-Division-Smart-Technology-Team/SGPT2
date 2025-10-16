@@ -20,7 +20,7 @@ class BusinessTermMapper:
             'variations': ['fras', 'f.r.a.', 'fire-risk-assessment'],
             'description': 'Fire safety evaluation documents'
         },
-        'AHU': {
+        'ahu': {
             'full_name': 'Air Handling Unit',
             'document_type': 'operational_doc',
             'search_terms': ['air handling unit', 'AHU', 'air handler'],
@@ -32,13 +32,13 @@ class BusinessTermMapper:
             'search_terms': ['building management system', 'BMS', 'controls'],
             'description': 'Building control and automation systems'
         },
-        'HVAC': {
+        'hvac': {
             'full_name': 'Heating, Ventilation, and Air Conditioning',
             'document_type': 'operational_doc',
             'search_terms': ['HVAC', 'heating ventilation', 'climate control'],
             'description': 'Building climate control systems'
         },
-        'Planon': {
+        'planon': {
             'full_name': 'Planon Property Management',
             'document_type': 'planon_data',
             'search_terms': ['planon', 'property management', 'property condition'],
@@ -51,13 +51,13 @@ class BusinessTermMapper:
             'search_terms': ['IQ4', 'iq4 controller', 'trend controller'],
             'description': 'Building management system controller'
         },
-        'O&M': {
+        'o&m': {
             'full_name': 'Operations & Maintenance',
             'document_type': 'operational_doc',
             'search_terms': ['operations maintenance', 'O&M', 'operating manual'],
             'description': 'Operations and maintenance documentation'
         },
-        'Desops': {
+        'desops': {
             'full_name': 'Description of Operations',
             'document_type': 'operational_doc',
             'search_terms': ['description of operations', 'DesOps', 'system operations'],

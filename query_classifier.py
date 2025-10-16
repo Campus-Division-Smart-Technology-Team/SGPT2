@@ -162,7 +162,7 @@ def parse_user_intent(query: str) -> Dict[str, Any]:
 
     # Detect action verbs
     action_patterns = {
-        'summarise': r'\b(summarise|summarise|summary|overview)\b',
+        'summarise': r'\b(summarise|summarize|summary|overview)\b',
         'list': r'\b(list|show|display|what are)\b',
         'find': r'\b(find|search|locate|where|get)\b',
         'compare': r'\b(compare|difference|versus|vs)\b'
