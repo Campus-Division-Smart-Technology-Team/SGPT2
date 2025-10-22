@@ -14,7 +14,7 @@ def list_index_names() -> List[str]:
     """Get list of available Pinecone index names."""
     try:
         idxs = pc.list_indexes()
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         return []
     if hasattr(idxs, "names"):
         return list(idxs.names())
@@ -41,7 +41,7 @@ def list_namespaces_for_index(idx) -> List[str]:
         names = sorted(list(set(names)), key=lambda n: (
             n != DEFAULT_NAMESPACE, n))
         return names
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         return [DEFAULT_NAMESPACE]
 
 
@@ -89,7 +89,7 @@ def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str]
         if vec is None:
             raise RuntimeError(
                 "Unexpected embeddings response shape; no vector values found")
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         raise RuntimeError(f"Server-side embedding failed: {e}") from e
 
     return idx.query(vector=vec, top_k=k, namespace=ns, include_metadata=True)

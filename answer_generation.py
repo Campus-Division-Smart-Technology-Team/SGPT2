@@ -566,7 +566,7 @@ Top Result Score: {top_result.get('score', 0):.3f}
         answer = content.strip() if content else "No answer generated."
         return answer, publication_info
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.error("Error generating answer: %s", e, exc_info=True)
         return "I encountered an error generating the answer. Please try again.", publication_info
 
@@ -679,7 +679,7 @@ Context: {context}
 
         return answer, publication_info
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.error(
             "Error generating building-focused answer: %s", e, exc_info=True)
         return enhanced_answer_with_source_date(
@@ -740,7 +740,7 @@ Context: {context}
 
         return answer, publication_info
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.error("Error generating comparison answer: %s",
                       e, exc_info=True)
         return "I encountered an error comparing buildings. Please try again.", ""

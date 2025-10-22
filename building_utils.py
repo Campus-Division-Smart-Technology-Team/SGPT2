@@ -95,7 +95,7 @@ def populate_building_cache_from_index(idx, namespace: str = "__default__"):
             len(_BUILDING_ALIASES_CACHE)
         )
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.error("Failed to populate building cache: %s",
                       e, exc_info=True)
         _CACHE_POPULATED = False

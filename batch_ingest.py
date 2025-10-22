@@ -254,7 +254,7 @@ def load_building_names_with_aliases(bucket: str, key: str) -> Tuple[List[str], 
 
         return canonical_names, name_to_canonical, alias_to_canonical
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.warning("Could not load building names with aliases: %s", e)
         return [], {}, {}
 
@@ -594,7 +594,7 @@ def extract_text_csv_by_building_enhanced(
                      len(building_docs))
         return building_docs
 
-    except Exception as ex:
+    except Exception as ex:  # pylint: disable=broad-except
         logging.warning("CSV extraction failed: %s", ex)
         return [(key, "", data.decode("utf-8", errors="ignore"), {})]
 

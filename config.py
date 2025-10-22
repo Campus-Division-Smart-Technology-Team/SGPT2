@@ -11,7 +11,7 @@ import streamlit as st
 try:
     from dotenv import load_dotenv  # optional in Streamlit Cloud
     load_dotenv()
-except Exception:
+except Exception:  # pylint: disable=broad-except
     pass
 
 # Streamlit Cloud secrets fallback
@@ -20,7 +20,7 @@ try:
         os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
     if "OPENAI_API_KEY" not in os.environ and "OPENAI_API_KEY" in st.secrets:
         os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-except Exception:
+except Exception:  # pylint: disable=broad-except
     pass
 
 # ----- Config Constants -----

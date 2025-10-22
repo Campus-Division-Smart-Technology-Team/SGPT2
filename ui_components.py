@@ -213,10 +213,10 @@ def render_sidebar():
                             st.write(f"- {name}")
                         if len(building_names) > 5:
                             st.write(f"... and {len(building_names) - 5} more")
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-except
                 st.warning(f"⚠️ Cache status unavailable: {e}")
         else:
-            st.warning("⚠️ Building cache not initialized")
+            st.warning("⚠️ Building cache not initialised")
             st.caption("Building name detection limited to pattern matching")
 
         st.markdown("---")

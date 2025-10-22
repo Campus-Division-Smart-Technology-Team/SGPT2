@@ -356,7 +356,7 @@ def search_source_for_latest_date(
 
         return latest_date_str, matching_docs
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.error(
             "Error searching dates for key='%s': %s",
             key_value, e, exc_info=True
@@ -394,7 +394,7 @@ def _fetch_document_chunks(idx, key_value: str, namespace: str) -> List[Dict[str
             )
             return matching_docs
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.debug("Metadata filter failed: %s", e)
 
     # Strategy 2: Semantic search fallback
@@ -406,7 +406,7 @@ def _fetch_document_chunks(idx, key_value: str, namespace: str) -> List[Dict[str
     try:
         raw = try_inference_search(
             idx, namespace, key_value, k=50, model_name=None)
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         raw = vector_query(idx, namespace, key_value, 50, DEFAULT_EMBED_MODEL)
 
     results = normalise_matches(raw)
@@ -458,6 +458,6 @@ def extract_date_from_single_result(result: Dict[str, Any]) -> Optional[str]:
 
         return None
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.warning("Error extracting date from single result: %s", e)
         return None

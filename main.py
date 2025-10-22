@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Main Streamlit application for Alfred the Gorilla chatbot.
-Enhanced with intelligent query classification, federated search, and building cache initialization.
+Enhanced with intelligent query classification, federated search, and building cache initialisation.
 Optimised version with reduced duplication and better error handling.
 """
 
@@ -54,43 +54,43 @@ logging.basicConfig(level=logging.INFO)
 
 
 @st.cache_resource
-def initialize_building_cache():
+def initialise_building_cache():
     """
-    Initialize building name cache from Pinecone.
+    Initialise building name cache from Pinecone.
     Cached to run only once per session.
 
     Returns:
-        True if cache initialized successfully, False otherwise
+        True if cache initialised successfully, False otherwise
     """
     try:
         # Use the first available index
         for idx_name in TARGET_INDEXES:
             try:
                 logging.info(
-                    "Attempting to initialize building cache from index '%s'", idx_name)
+                    "Attempting to initialise building cache from index '%s'", idx_name)
                 idx = open_index(idx_name)
                 populate_building_cache_from_index(idx, DEFAULT_NAMESPACE)
 
                 if _CACHE_POPULATED:
                     cache_status = get_cache_status()
                     logging.info(
-                        "✅ Building cache initialized from index '%s': %d canonical names, %d aliases",
+                        "✅ Building cache initialised from index '%s': %d canonical names, %d aliases",
                         idx_name,
                         cache_status['canonical_names'],
                         cache_status['aliases']
                     )
                     return True
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-except
                 logging.warning(
                     "Failed to init cache from %s: %s", idx_name, e)
                 continue
 
         logging.warning(
-            "⚠️ Could not initialize building cache from any index")
+            "⚠️ Could not initialise building cache from any index")
         return False
 
-    except Exception as e:
-        logging.error("Error initializing building cache: %s",
+    except Exception as e:  # pylint: disable=broad-except
+        logging.error("Error initialising building cache: %s",
                       e, exc_info=True)
         return False
 
@@ -173,11 +173,11 @@ def main():
     render_custom_css()
 
     # Initialize building cache
-    cache_initialized = initialize_building_cache()
+    cache_initialised = initialise_building_cache()
 
-    if not cache_initialized:
+    if not cache_initialised:
         st.warning(
-            "⚠️ Building name cache could not be initialized. "
+            "⚠️ Building name cache could not be initialised. "
             "Building name detection may be limited to pattern matching."
         )
 
@@ -265,7 +265,7 @@ def handle_search_query(query: str, top_k: int):
                     handle_successful_results(
                         answer, results, publication_date_info)
 
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-except
                 handle_search_error(e)
 
 
@@ -317,7 +317,7 @@ def handle_successful_results(
         display_direct_results(results, publication_date_info)
 
 
-def handle_search_error(error: Exception):
+def handle_search_error(error: Exception):  # pylint: disable=broad-except
     """Handle errors during search."""
     error_msg = ERROR_MESSAGE_TEMPLATE.format(error=str(error))
     st.error(error_msg)

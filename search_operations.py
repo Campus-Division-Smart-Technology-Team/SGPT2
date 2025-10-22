@@ -166,7 +166,7 @@ def search_one_index(
                     raw = try_inference_search(
                         idx, ns, question, k, model_name=None)
                     mode_used = "server-side (inference)"
-                except Exception:
+                except Exception:  # pylint: disable=broad-except
                     # Use vector query with filter support
                     vec = embed_texts(
                         [question], embed_model or DEFAULT_EMBED_MODEL)[0]
@@ -644,7 +644,7 @@ def _get_publication_date_info(
         else:
             return "📅 **Publication date unknown** for top operational document"
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         logging.warning("Failed to get publication date: %s", e)
         return ""
 
