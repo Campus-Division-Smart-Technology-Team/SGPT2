@@ -231,7 +231,16 @@ def matches_single_building_value(
     if value_norm == target_norm:
         return True
 
-    # Strategy 3: Check if value is an alias
+    # Strategy 3: Substring match
+    if target_norm in value_norm or value_norm in target_norm:
+        return True
+
+    # Strategy 4: Fuzzy matching (80% threshold)
+    similarity = fuzzy_match_score(value_norm, target_norm)
+    if similarity >= FUZZY_MATCH_THRESHOLD:
+        return True
+
+    # Strategy 5: Check if value is an alias
     if _CACHE_POPULATED and _BUILDING_ALIASES_CACHE:
         canonical_for_value = _BUILDING_ALIASES_CACHE.get(value_lower)
         canonical_for_target = _BUILDING_ALIASES_CACHE.get(target_lower)
@@ -248,15 +257,6 @@ def matches_single_building_value(
         # Target is an alias for value
         if canonical_for_target and canonical_for_target.lower() == value_lower:
             return True
-
-    # Strategy 4: Fuzzy matching (80% threshold)
-    similarity = fuzzy_match_score(value_norm, target_norm)
-    if similarity >= FUZZY_MATCH_THRESHOLD:
-        return True
-
-    # Strategy 5: Check for substring match
-    if target_norm in value_norm or value_norm in target_norm:
-        return True
 
     return False
 

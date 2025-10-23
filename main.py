@@ -195,7 +195,7 @@ def main():
         indexes_with_buildings = cache_status.get('indexes_with_buildings', [])
         if indexes_with_buildings:
             st.success(
-                f"✅ Building data loaded from {len(indexes_with_buildings)} index(es): "
+                f"✅ Building data loaded from {len(indexes_with_buildings)} index: "
                 f"{', '.join(indexes_with_buildings)}"
             )
 

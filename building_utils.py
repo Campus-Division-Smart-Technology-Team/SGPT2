@@ -3,12 +3,15 @@
 """
 Building name extraction and lookup utilities with dynamic Pinecone index support.
 IMPROVED VERSION: Enhanced fuzzy matching against multiple metadata fields.
+FIXED: Now works with lowercase queries like "does old park hill have an fra?"
 
 Key improvements:
 - Fuzzy matching (80% threshold) against multiple metadata fields
 - Support for Property names, UsrFRACondensedPropertyName, building_name, canonical_building_name
 - Enhanced metadata search strategy for better building detection
 - Better handling of variations and aliases
+- FIXED: Regex patterns now accept lowercase input
+- ADDED: N-gram fallback for queries that don't match patterns
 """
 
 import re
@@ -42,32 +45,42 @@ BUILDING_METADATA_FIELDS = [
 FUZZY_MATCH_THRESHOLD = 0.80
 
 # ============================================================================
-# BUILDING PATTERNS (for query extraction)
+# BUILDING PATTERNS (for query extraction) - FIXED FOR LOWERCASE
 # ============================================================================
 
-# Common building name patterns
+# Common building name patterns (IMPROVED: now accepts lowercase input)
 BUILDING_PATTERNS = [
-    # "at <building>" pattern
+    # Pattern 1: "at <building>" - accepts lowercase
     re.compile(
-        r'\bat\s+([A-Z][A-Za-z\s\-\']+(?:Building|House|Hall|Centre|Center|Complex|Tower)?)', re.IGNORECASE),
-    # "in <building>" pattern
+        r'\bat\s+([A-Za-z][A-Za-z\s\-\']+)', re.IGNORECASE),
+
+    # Pattern 2: "in <building>" - accepts lowercase
     re.compile(
-        r'\bin\s+([A-Z][A-Za-z\s\-\']+(?:Building|House|Hall|Centre|Center|Complex|Tower)?)', re.IGNORECASE),
-    # "for <building>" pattern
+        r'\bin\s+([A-Za-z][A-Za-z\s\-\']+)', re.IGNORECASE),
+
+    # Pattern 3: "for <building>" - accepts lowercase
     re.compile(
-        r'\bfor\s+([A-Z][A-Za-z\s\-\']+(?:Building|House|Hall|Centre|Center|Complex|Tower)?)', re.IGNORECASE),
-    # "<building> building/house" pattern
+        r'\bfor\s+([A-Za-z][A-Za-z\s\-\']+)', re.IGNORECASE),
+
+    # Pattern 4: "of <building>" - NEW: for "FRA of building" queries
     re.compile(
-        r'\b([A-Z][A-Za-z\s\-\']+)\s+(?:Building|House|Hall|Centre|Center)', re.IGNORECASE),
-    # Capitalized words (potential building names)
-    re.compile(r'\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b'),
+        r'\bof\s+([A-Za-z][A-Za-z\s\-\']+)', re.IGNORECASE),
+
+    # Pattern 5: "<building> building/house/etc" - accepts lowercase
+    re.compile(
+        r'\b([A-Za-z][A-Za-z\s\-\']+)\s+(?:Building|House|Hall|Centre|Center|Complex|Tower)', re.IGNORECASE),
+
+    # Pattern 6: Multi-word phrases (2-4 words) - last resort
+    re.compile(r'\b([A-Za-z]+(?:\s+[A-Za-z]+){1,3})\b'),
 ]
 
-# Question words to filter out
+# Question words and common words to filter out (expanded for better filtering)
 QUESTION_WORDS = frozenset({
     'what', 'when', 'where', 'which', 'who', 'how', 'why', 'tell', 'show',
     'find', 'search', 'get', 'give', 'list', 'are', 'is', 'do', 'does',
-    'can', 'could', 'would', 'should', 'fire', 'risk', 'assessment'
+    'can', 'could', 'would', 'should', 'fire', 'risk', 'assessment',
+    'the', 'a', 'an', 'have', 'has', 'there', 'their', 'this', 'that',
+    'these', 'those', 'my', 'our', 'your', 'its', 'fra', 'fras'
 })
 
 # Minimum length for building names
@@ -240,162 +253,136 @@ def populate_building_cache_from_index(
                 if not field_value:
                     continue
 
-                # Handle list of values
+                # Handle list values (e.g. Property names)
                 if isinstance(field_value, list):
-                    for value in field_value:
-                        if value:
-                            value_str = str(value).strip()
-                            if value_str:
-                                value_norm = value_str.lower()
-                                _METADATA_FIELDS_CACHE[canonical].add(
-                                    value_str)
-                                _METADATA_FIELDS_CACHE[canonical].add(
-                                    value_norm)
-
-                                # Also add to aliases cache
-                                if value_norm not in _BUILDING_ALIASES_CACHE:
-                                    _BUILDING_ALIASES_CACHE[value_norm] = canonical
-                                    new_aliases_count += 1
-
-                                new_metadata_fields_count += 1
-
-                # Handle string (might be JSON)
-                elif isinstance(field_value, str):
-                    # Try to parse as JSON first
-                    try:
-                        value_list = json.loads(field_value)
-                        if isinstance(value_list, list):
-                            for value in value_list:
-                                if value:
-                                    value_str = str(value).strip()
-                                    if value_str:
-                                        value_norm = value_str.lower()
-                                        _METADATA_FIELDS_CACHE[canonical].add(
-                                            value_str)
-                                        _METADATA_FIELDS_CACHE[canonical].add(
-                                            value_norm)
-
-                                        if value_norm not in _BUILDING_ALIASES_CACHE:
-                                            _BUILDING_ALIASES_CACHE[value_norm] = canonical
-                                            new_aliases_count += 1
-
-                                        new_metadata_fields_count += 1
-                        else:
-                            # Single value from JSON
-                            value_str = str(value_list).strip()
-                            if value_str:
-                                value_norm = value_str.lower()
-                                _METADATA_FIELDS_CACHE[canonical].add(
-                                    value_str)
-                                _METADATA_FIELDS_CACHE[canonical].add(
-                                    value_norm)
-
-                                if value_norm not in _BUILDING_ALIASES_CACHE:
-                                    _BUILDING_ALIASES_CACHE[value_norm] = canonical
-                                    new_aliases_count += 1
-
-                                new_metadata_fields_count += 1
-                    except (json.JSONDecodeError, TypeError):
-                        # Not JSON, treat as single string value
-                        value_str = field_value.strip()
-                        if value_str:
-                            value_norm = value_str.lower()
-                            _METADATA_FIELDS_CACHE[canonical].add(value_str)
-                            _METADATA_FIELDS_CACHE[canonical].add(value_norm)
-
-                            if value_norm not in _BUILDING_ALIASES_CACHE:
-                                _BUILDING_ALIASES_CACHE[value_norm] = canonical
-                                new_aliases_count += 1
-
+                    for item in field_value:
+                        if item and str(item).strip():
+                            value = str(item).strip()
+                            _METADATA_FIELDS_CACHE[canonical].add(value)
+                            _METADATA_FIELDS_CACHE[canonical].add(
+                                value.lower())
                             new_metadata_fields_count += 1
 
-        buildings_found = len(canonical_names)
+                # Handle string values
+                elif isinstance(field_value, str) and field_value.strip():
+                    value = field_value.strip()
+                    _METADATA_FIELDS_CACHE[canonical].add(value)
+                    _METADATA_FIELDS_CACHE[canonical].add(value.lower())
+                    new_metadata_fields_count += 1
 
-        if buildings_found > 0:
+            # Extract building aliases if present
+            aliases_field = metadata.get('building_aliases') or metadata.get(
+                'aliases')
+            if aliases_field:
+                aliases = []
+                if isinstance(aliases_field, str):
+                    try:
+                        aliases = json.loads(aliases_field)
+                    except json.JSONDecodeError:
+                        aliases = [a.strip()
+                                   for a in aliases_field.split(',')]
+                elif isinstance(aliases_field, list):
+                    aliases = aliases_field
+
+                for alias in aliases:
+                    if alias and str(alias).strip():
+                        alias_str = str(alias).strip()
+                        alias_lower = alias_str.lower()
+                        if alias_lower not in _BUILDING_ALIASES_CACHE:
+                            _BUILDING_ALIASES_CACHE[alias_lower] = canonical
+                            new_aliases_count += 1
+
+                        # Also add to metadata fields
+                        _METADATA_FIELDS_CACHE[canonical].add(alias_str)
+                        _METADATA_FIELDS_CACHE[canonical].add(alias_lower)
+
+        num_canonical = len(canonical_names)
+
+        if num_canonical > 0:
             _CACHE_POPULATED = True
             logging.info(
-                "✅ Index '%s': Found %d buildings (%d canonical names, %d aliases, %d metadata fields)",
+                "✅ Populated cache from index '%s': %d canonical buildings, "
+                "%d new canonical entries, %d new aliases, %d metadata field variations",
                 resolved_index_name,
-                buildings_found,
+                num_canonical,
                 new_names_count,
                 new_aliases_count,
                 new_metadata_fields_count
             )
         else:
             logging.info(
-                "⚠️  Index '%s': No building data found",
-                resolved_index_name
-            )
+                "No building data found in index '%s'", resolved_index_name)
 
-        return buildings_found
+        return num_canonical
 
     except Exception as e:  # pylint: disable=broad-except
-        logging.warning(
-            "Failed to populate building cache from index '%s': %s",
+        logging.error(
+            "Error populating building cache from index '%s': %s",
             index_name or "unknown",
-            e
+            e,
+            exc_info=True
         )
         return 0
 
 
-def get_indexes_with_buildings() -> List[str]:
-    """
-    Get list of indexes that have building data.
-
-    Returns:
-        List of index names with building data
-    """
-    return _INDEXES_WITH_BUILDINGS.copy()
-
-
-def get_cache_status() -> Dict[str, Any]:
-    """
-    Get current cache status and statistics.
-
-    Returns:
-        Dictionary with cache information
-    """
-    return {
-        'populated': _CACHE_POPULATED,
-        'canonical_names': len(set(_BUILDING_NAMES_CACHE.values())),
-        'aliases': len(_BUILDING_ALIASES_CACHE),
-        'metadata_fields_count': sum(len(fields) for fields in _METADATA_FIELDS_CACHE.values()),
-        'indexes_with_buildings': _INDEXES_WITH_BUILDINGS.copy()
-    }
-
-
 def clear_building_cache():
-    """Clear all building cache data."""
-    global _BUILDING_NAMES_CACHE, _BUILDING_ALIASES_CACHE, _METADATA_FIELDS_CACHE
-    global _CACHE_POPULATED, _INDEXES_WITH_BUILDINGS
-
+    """Clear the building name cache."""
+    global _BUILDING_NAMES_CACHE, _BUILDING_ALIASES_CACHE, _METADATA_FIELDS_CACHE, _CACHE_POPULATED, _INDEXES_WITH_BUILDINGS
     _BUILDING_NAMES_CACHE.clear()
     _BUILDING_ALIASES_CACHE.clear()
     _METADATA_FIELDS_CACHE.clear()
     _CACHE_POPULATED = False
     _INDEXES_WITH_BUILDINGS.clear()
-
     logging.info("Building cache cleared")
+
+
+def get_cache_status() -> Dict[str, Any]:
+    """
+    Get current cache status.
+
+    Returns:
+        Dictionary with cache statistics
+    """
+    return {
+        'populated': _CACHE_POPULATED,
+        'canonical_names': len(set(_BUILDING_NAMES_CACHE.values())),
+        'aliases': len(_BUILDING_ALIASES_CACHE),
+        'metadata_fields': sum(len(v) for v in _METADATA_FIELDS_CACHE.values()),
+        'indexes_with_buildings': _INDEXES_WITH_BUILDINGS.copy()
+    }
 
 
 def get_building_names_from_cache() -> List[str]:
     """
-    Get all canonical building names from cache.
+    Get list of all canonical building names from cache.
 
     Returns:
         List of canonical building names
     """
-    return list(set(_BUILDING_NAMES_CACHE.values()))
+    if not _CACHE_POPULATED:
+        return []
+    return sorted(list(set(_BUILDING_NAMES_CACHE.values())))
+
+
+def get_indexes_with_buildings() -> List[str]:
+    """
+    Get list of indexes that contain building data.
+
+    Returns:
+        List of index names
+    """
+    return _INDEXES_WITH_BUILDINGS.copy()
 
 
 # ============================================================================
-# FUZZY MATCHING FUNCTIONS
+# FUZZY MATCHING UTILITIES
 # ============================================================================
 
 
 def fuzzy_match_score(str1: str, str2: str) -> float:
     """
     Calculate fuzzy match score between two strings.
+    Used by search_operations.py for building matching.
 
     Args:
         str1: First string
@@ -413,23 +400,25 @@ def find_fuzzy_matches(
     threshold: float = FUZZY_MATCH_THRESHOLD
 ) -> List[tuple[str, float]]:
     """
-    Find fuzzy matches from a list of candidates.
+    Find fuzzy matches with scores above threshold.
 
     Args:
         query: Query string
         candidates: List of candidate strings
-        threshold: Minimum similarity threshold (default 0.80)
+        threshold: Minimum similarity threshold
 
     Returns:
-        List of (candidate, score) tuples sorted by score descending
+        List of (match, score) tuples, sorted by score descending
     """
     query_lower = query.lower().strip()
     matches = []
 
     for candidate in candidates:
-        score = fuzzy_match_score(query_lower, candidate)
-        if score >= threshold:
-            matches.append((candidate, score))
+        candidate_lower = candidate.lower().strip()
+        ratio = SequenceMatcher(None, query_lower, candidate_lower).ratio()
+
+        if ratio >= threshold:
+            matches.append((candidate, ratio))
 
     # Sort by score descending
     matches.sort(key=lambda x: x[1], reverse=True)
@@ -501,8 +490,63 @@ def normalise_building_name(name: str) -> str:
 
 
 # ============================================================================
-# BUILDING EXTRACTION FROM QUERY
+# BUILDING EXTRACTION FROM QUERY - IMPROVED WITH N-GRAM FALLBACK
 # ============================================================================
+
+
+def extract_building_from_query_ngram_fallback(
+    query: str,
+    known_buildings: List[str]
+) -> Optional[str]:
+    """
+    Fallback extraction method using n-gram matching.
+    Tries all 2-4 word combinations and validates against known buildings.
+
+    This works well with lowercase input where pattern matching fails.
+
+    Args:
+        query: User query string
+        known_buildings: List of known building names from cache
+
+    Returns:
+        Canonical building name if found, None otherwise
+    """
+    if not query or not known_buildings:
+        return None
+
+    query_lower = query.lower()
+    words = query_lower.split()
+
+    # Try longer n-grams first (4-grams, then 3-grams, then 2-grams)
+    for n in range(min(4, len(words)), 1, -1):
+        for i in range(len(words) - n + 1):
+            candidate_words = words[i:i+n]
+
+            # Skip if contains too many question words
+            question_word_count = sum(
+                1 for w in candidate_words if w in QUESTION_WORDS
+            )
+            if question_word_count > len(candidate_words) / 2:
+                continue
+
+            candidate = ' '.join(candidate_words)
+
+            # Must be at least MIN_BUILDING_NAME_LENGTH characters
+            if len(candidate) < MIN_BUILDING_NAME_LENGTH:
+                continue
+
+            # Validate against known buildings
+            validated = validate_building_name_fuzzy(
+                candidate, known_buildings)
+            if validated:
+                logging.info(
+                    "✅ N-gram fallback matched: '%s' -> '%s'",
+                    candidate,
+                    validated
+                )
+                return validated
+
+    return None
 
 
 def extract_building_from_query(
@@ -512,10 +556,10 @@ def extract_building_from_query(
 ) -> Optional[str]:
     """
     Extract building name from user query using multiple strategies.
-    IMPROVED: Uses fuzzy matching against metadata fields.
+    IMPROVED: Works with lowercase input and uses n-gram fallback.
 
     Args:
-        query: User query string
+        query: User query string (works with lowercase)
         known_buildings: Optional list of known building names
         use_cache: Whether to use cached building data
 
@@ -535,7 +579,7 @@ def extract_building_from_query(
     if not known_buildings:
         return None
 
-    # Try patterns to extract potential building name
+    # Phase 1: Try pattern matching with improved filtering
     extracted_name = None
     for pattern in BUILDING_PATTERNS:
         matches = pattern.findall(query)
@@ -545,20 +589,46 @@ def extract_building_from_query(
                 matches[0], str) else matches[0][0]
             candidate = candidate.strip()
 
-            # Filter out question words and short names
-            if (candidate.lower() not in QUESTION_WORDS and
-                    len(candidate) >= MIN_BUILDING_NAME_LENGTH):
-                extracted_name = candidate
-                break
+            # IMPROVED: Clean up candidate by removing trailing question words
+            words = candidate.split()
+            cleaned_words = []
 
-    if not extracted_name:
-        logging.debug("No building pattern match found in query")
-        return None
+            for word in words:
+                word_lower = word.lower()
+                # Stop if we hit a question word
+                if word_lower in QUESTION_WORDS:
+                    break
+                cleaned_words.append(word)
 
-    logging.debug("Extracted potential building name: '%s'", extracted_name)
+            if cleaned_words:
+                candidate = ' '.join(cleaned_words)
 
-    # Validate against known buildings with fuzzy matching
-    return validate_building_name_fuzzy(extracted_name, known_buildings)
+                # Filter: must be at least MIN_BUILDING_NAME_LENGTH chars
+                if (len(candidate) >= MIN_BUILDING_NAME_LENGTH and
+                        candidate.lower() not in QUESTION_WORDS):
+                    extracted_name = candidate
+                    logging.debug("✅ Pattern extracted: '%s'", extracted_name)
+                    break
+
+    # If pattern matching succeeded, validate it
+    if extracted_name:
+        logging.debug("Extracted potential building name: '%s'",
+                      extracted_name)
+        validated = validate_building_name_fuzzy(
+            extracted_name, known_buildings)
+        if validated:
+            return validated
+
+        # If validation failed, fall through to n-gram fallback
+        logging.debug(
+            "Pattern extraction validation failed, trying n-gram fallback...")
+    else:
+        logging.debug(
+            "No building pattern match found in query, trying n-gram fallback...")
+
+    # Phase 2: N-gram fallback for queries that don't match patterns
+    # This is especially useful for lowercase queries like "does old park hill have an fra?"
+    return extract_building_from_query_ngram_fallback(query, known_buildings)
 
 
 def validate_building_name_fuzzy(
