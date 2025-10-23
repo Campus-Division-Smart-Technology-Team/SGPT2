@@ -13,16 +13,6 @@ from dataclasses import dataclass, field
 from building_utils import extract_building_from_query
 from business_terms import BusinessTermMapper
 
-# # Import BusinessTermMapper - ensure this imports the optimised version
-# try:
-#     from business_terms import BusinessTermMapper
-# except ImportError:
-#     # Fallback if business_terms is not available
-#     class BusinessTermMapper:
-#         @classmethod
-#         def detect_business_terms(cls, query: str) -> List[Dict[str, Any]]:
-#             return []
-
 # ============================================================================
 # TYPES
 # ============================================================================
@@ -35,7 +25,6 @@ QueryType = Literal['greeting', 'about', 'gratitude', 'farewell', 'search']
 
 # Emojis (properly encoded)
 EMOJI_GORILLA = "🦍"
-EMOJI_APPLE = "🍎"
 EMOJI_BUILDING = "🏢"
 EMOJI_FIRE = "🔥"
 
@@ -99,7 +88,7 @@ ACTION_PATTERNS = {
 # ============================================================================
 
 GREETING_RESPONSES = [
-    f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• {EMOJI_APPLE} Apples (the fruit) and Apple Inc.\n• {EMOJI_BUILDING} Building Management Systems (BMS)\n• {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
+    f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• {EMOJI_BUILDING} Building Management Systems (BMS)\n• {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
     "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about BMS and FRAs. How can I assist you?",
     f"Hello! Alfred here {EMOJI_GORILLA}, your University of Bristol assistant. I have access to information about building management systems and Fire Risk Assessments. What can I help you with?"
 ]

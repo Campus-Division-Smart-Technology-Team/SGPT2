@@ -23,6 +23,7 @@ from date_utils import (
 )
 from pinecone_utils import open_index
 
+
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -182,20 +183,11 @@ def find_operational_date(
     """
     if not operational_results:
         return None, None
+    # Import here to avoid circular dependency
+    from search_operations import matches_building_fuzzy
 
     # Filter by building if specified
     if target_building:
-        # Import here to avoid circular dependency
-        try:
-            from search_operations import matches_building_fuzzy
-        except ImportError:
-            # Fallback to original if improved version not available
-            from search_operations import matches_building
-            # Wrapper function with correct signature
-
-            def matches_building_fuzzy(result: Dict[str, Any], target_building: str) -> bool:
-                return matches_building(get_building_name_from_result(result), target_building)
-
         building_specific = [
             r for r in operational_results
             if matches_building_fuzzy(r, target_building)
@@ -211,87 +203,32 @@ def find_operational_date(
             )
         else:
             logging.warning(
-                "⚠️ No operational docs found for building '%s', using top result",
+                "No operational docs match building '%s', using top result",
                 target_building
             )
             top_operational = operational_results[0]
     else:
         top_operational = operational_results[0]
 
-    key_value = top_operational.get("key", "")
-    building_name = get_building_name_from_result(top_operational)
+    # Get date
+    doc_key = get_metadata_field(top_operational, 'key')
+    index_name = top_operational.get('index', '')
 
-    logging.debug(
-        "Processing operational doc: %s (score: %.3f, building: %s)",
-        key_value,
-        top_operational.get('score', 0),
-        building_name
-    )
-
-    # Strategy 1: Comprehensive search across all chunks
-    operational_date = _search_comprehensive_date(top_operational, key_value)
-
-    # Strategy 2: Check metadata fields
-    if not operational_date:
-        operational_date = _search_metadata_date(top_operational)
-
-    # Strategy 3: Extract from text
-    if not operational_date:
-        operational_date = extract_date_from_single_result(top_operational)
-        if operational_date:
-            logging.info("Extracted date from text: %s", operational_date)
-
-    if not operational_date:
-        logging.warning("No date found for %s", key_value)
-
-    return operational_date, key_value
-
-
-def _search_comprehensive_date(result: Dict[str, Any], key_value: str) -> Optional[str]:
-    """Search across all chunks of a document for dates."""
-    if not key_value:
-        return None
-
-    idx_name = result.get("index", "")
-    if not idx_name:
-        return None
+    if not doc_key or not index_name:
+        logging.warning("Missing key or index for operational doc")
+        return None, None
 
     try:
-        idx = open_index(idx_name)
-        namespace = result.get("namespace", DEFAULT_NAMESPACE)
-
-        logging.debug(
-            "Comprehensive date search: index=%s, namespace=%s, key=%s",
-            idx_name, namespace, key_value
+        idx = open_index(index_name)
+        date, _ = search_source_for_latest_date(
+            idx,
+            doc_key,
+            top_operational.get('namespace', DEFAULT_NAMESPACE)
         )
-
-        latest_date, _ = search_source_for_latest_date(
-            idx, key_value, namespace)
-
-        if latest_date:
-            logging.info(
-                "Found date via comprehensive search: %s", latest_date)
-            return latest_date
-
+        return date, doc_key
     except Exception as e:  # pylint: disable=broad-except
-        logging.warning(
-            "Comprehensive date search failed for %s: %s", key_value, e)
-
-    return None
-
-
-def _search_metadata_date(result: Dict[str, Any]) -> Optional[str]:
-    """Search metadata fields for date information."""
-    metadata = result.get('metadata', {})
-
-    for field in DATE_FIELDS_PRIORITY:
-        date_value = metadata.get(field)
-        if date_value:
-            logging.info("Found date in metadata field '%s': %s",
-                         field, date_value)
-            return date_value
-
-    return None
+        logging.error("Failed to get operational date: %s", e)
+        return None, doc_key
 
 
 def get_document_dates_by_type(
@@ -299,36 +236,20 @@ def get_document_dates_by_type(
     target_building: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Extract dates from mixed Planon and operational documents.
-    IMPROVED: Better building awareness.
+    Extract dates from different document types.
 
     Args:
-        results: Mixed list of search results
-        target_building: Optional building to filter by
+        results: Search results
+        target_building: Optional building to prioritise
 
     Returns:
-        (planon_date, operational_date, operational_doc_key) tuple
+        (planon_date, operational_date, operational_doc_key)
     """
     planon_results, operational_results = separate_results_by_type(results)
 
-    # Get Planon date
-    planon_date = find_planon_date(planon_results) if planon_results else None
-
-    # Get operational date (building-aware)
+    planon_date = find_planon_date(planon_results)
     operational_date, operational_doc_key = find_operational_date(
         operational_results, target_building
-    )
-
-    # Log date findings
-    building_name = target_building or "all buildings"
-    planon_str = planon_date if planon_date else "NONE"
-    operational_str = f"{operational_date} (from {operational_doc_key})" if operational_date else "NONE"
-
-    logging.info(
-        "Dates found for %s - Planon: %s, Operational: %s",
-        building_name,
-        planon_str,
-        operational_str
     )
 
     return planon_date, operational_date, operational_doc_key
@@ -340,140 +261,166 @@ def format_date_information(
     operational_doc_key: Optional[str]
 ) -> Tuple[str, str]:
     """
-    Format date information for LLM context and user display.
+    Format date information for prompts and display.
 
     Args:
-        planon_date: Planon property condition assessment date
-        operational_date: Operational/technical document date
-        operational_doc_key: Key of operational document
+        planon_date: Planon assessment date
+        operational_date: Operational doc date
+        operational_doc_key: Key of operational doc
 
     Returns:
-        (context_str, display_str) tuple
+        (date_context_for_prompt, publication_info_for_display)
     """
-    context_parts = []
-    display_parts = []
+    date_context_parts = []
+    publication_parts = []
 
     if operational_date:
-        parsed = parse_date_string(operational_date)
-        display_date = format_display_date(parsed)
+        parsed_op = parse_date_string(operational_date)
+        display_op = format_display_date(parsed_op)
 
-        context_parts.append(
-            f"Technical documentation last updated: {display_date} "
-            f"(source: {operational_doc_key or 'operational document'})"
+        date_context_parts.append(
+            f"Technical Documentation Date: {operational_date} (from document: {operational_doc_key})"
         )
-        display_parts.append(
-            f"{EMOJI_DOCUMENT} Technical documentation last updated: **{display_date}**"
+        publication_parts.append(
+            f"{EMOJI_DOCUMENT} Technical documentation last updated: **{display_op}**"
         )
 
     if planon_date:
-        parsed = parse_date_string(planon_date)
-        display_date = format_display_date(parsed)
+        parsed_planon = parse_date_string(planon_date)
+        display_planon = format_display_date(parsed_planon)
 
-        context_parts.append(
-            f"Property condition assessment date: {display_date}"
+        date_context_parts.append(
+            f"Property Condition Assessment Date: {planon_date}"
         )
-        display_parts.append(
-            f"{EMOJI_BUILDING} Property assessment: **{display_date}**"
+        publication_parts.append(
+            f"{EMOJI_BUILDING} Property condition assessed: **{display_planon}**"
         )
 
-    if not context_parts:
-        context_str = "Date information: Not available"
-        display_str = ""
-    else:
-        context_str = "\n".join(context_parts)
-        display_str = " | ".join(display_parts)
+    if not date_context_parts:
+        date_context_parts.append("Date Information: Not available")
+        publication_parts.append(
+            f"{EMOJI_CALENDAR} **Publication date unknown**")
 
-    return context_str, display_str
+    date_context = "\n".join(date_context_parts)
+    publication_info = "\n".join(publication_parts)
+
+    return date_context, publication_info
 
 
-def build_context_from_results(results: List[Dict[str, Any]], max_chars: int = 8000) -> str:
-    """Build context string from search results with metadata."""
+def build_context_string(results: List[Dict[str, Any]], max_chars: int = 8000) -> str:
+    """
+    Build context string from search results with character limit.
+
+    Args:
+        results: Search results
+        max_chars: Maximum characters to include
+
+    Returns:
+        Context string
+    """
     context_parts = []
-    total_chars = 0
+    char_count = 0
 
-    for i, r in enumerate(results, 1):
-        text = get_text_from_result(r)
-        doc_type = get_metadata_field(r, 'document_type', 'unknown')
-        building = get_building_name_from_result(r)
-        score = r.get('score', 0)
+    for i, result in enumerate(results, 1):
+        text = get_text_from_result(result)
+        doc_key = get_metadata_field(result, 'key', 'Unknown')
+        doc_type = get_metadata_field(result, 'document_type', 'unknown')
+        building = get_building_name_from_result(result)
 
-        # Add metadata header
-        header = f"[Result {i} - Type: {doc_type}, Building: {building}, Score: {score:.3f}]"
-        snippet = f"{header}\n{text[:1500]}"
+        # Format result
+        result_text = f"\n[Result {i}]\n"
+        result_text += f"Source: {doc_key}\n"
+        result_text += f"Document Type: {doc_type}\n"
+        result_text += f"Building: {building}\n"
+        result_text += f"Content: {text}\n"
 
-        if total_chars + len(snippet) > max_chars:
+        # Check if adding this would exceed limit
+        if char_count + len(result_text) > max_chars:
+            context_parts.append("\n[Additional results truncated...]")
             break
 
-        context_parts.append(snippet)
-        total_chars += len(snippet)
+        context_parts.append(result_text)
+        char_count += len(result_text)
 
-    return "\n\n".join(context_parts)
+    return "\n".join(context_parts)
 
 
-def build_building_grouped_context(results: List[Dict[str, Any]], max_chars: int = 6000) -> str:
+def build_building_grouped_context(results: List[Dict[str, Any]], max_chars: int = 8000) -> str:
     """
-    Build context grouped by document type for building-specific queries.
-    IMPROVED: Uses enhanced building name extraction.
+    Build context grouped by building with character limit.
+
+    Args:
+        results: Search results
+        max_chars: Maximum characters
+
+    Returns:
+        Context string grouped by building
     """
-    planon_results, operational_results = separate_results_by_type(results)
+    # Group by building
+    building_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for result in results:
+        building = get_building_name_from_result(result)
+        if building not in building_groups:
+            building_groups[building] = []
+        building_groups[building].append(result)
 
     context_parts = []
-    total_chars = 0
+    char_count = 0
 
-    # Add operational/FRA docs first (higher priority for technical questions)
-    if operational_results:
-        context_parts.append("=== TECHNICAL DOCUMENTATION ===")
-        for i, r in enumerate(operational_results, 1):
-            text = get_text_from_result(r)
-            doc_type = get_metadata_field(r, 'document_type', 'unknown')
-            building = get_building_name_from_result(r)
-            key = r.get('key', 'unknown')
+    for building, building_results in building_groups.items():
+        building_section = f"\n=== Building: {building} ===\n"
 
-            snippet = f"[Document {i}: {doc_type}, Building: {building}, Key: {key}]\n{text[:1200]}"
+        for i, result in enumerate(building_results, 1):
+            text = get_text_from_result(result)
+            doc_key = get_metadata_field(result, 'key', 'Unknown')
+            doc_type = get_metadata_field(result, 'document_type', 'unknown')
 
-            if total_chars + len(snippet) > max_chars:
-                break
+            result_text = f"\n[{building} - Result {i}]\n"
+            result_text += f"Source: {doc_key}\n"
+            result_text += f"Document Type: {doc_type}\n"
+            result_text += f"Content: {text}\n"
 
-            context_parts.append(snippet)
-            total_chars += len(snippet)
+            if char_count + len(building_section) + len(result_text) > max_chars:
+                context_parts.append("\n[Additional results truncated...]")
+                return "\n".join(context_parts)
 
-    # Add Planon data if space remains
-    if planon_results and total_chars < max_chars:
-        context_parts.append("\n=== PROPERTY/PLANON DATA ===")
-        for i, r in enumerate(planon_results, 1):
-            text = get_text_from_result(r)
-            building = get_building_name_from_result(r)
+            if i == 1:
+                context_parts.append(building_section)
+                char_count += len(building_section)
 
-            snippet = f"[Record {i}: Building: {building}]\n{text[:800]}"
+            context_parts.append(result_text)
+            char_count += len(result_text)
 
-            if total_chars + len(snippet) > max_chars:
-                break
-
-            context_parts.append(snippet)
-            total_chars += len(snippet)
-
-    return "\n\n".join(context_parts)
+    return "\n".join(context_parts)
 
 
-def build_term_explanation(term_context: Optional[Dict]) -> str:
-    """Build explanation of business terms for LLM context."""
+def build_term_explanation(term_context: Optional[Dict] = None) -> str:
+    """
+    Build explanation of business terms detected in query.
+
+    Args:
+        term_context: Business term context
+
+    Returns:
+        Term explanation string
+    """
     if not term_context:
         return ""
 
     explanations = []
     for term_key, term_info in term_context.items():
-        full_name = term_info.get('full_name', term_key.upper())
-        description = term_info.get('description', '')
         explanations.append(
-            f"- **{term_key.upper()}** ({full_name}): {description}")
+            f"- **{term_info['full_name']}** ({term_key.upper()}): {term_info['description']}"
+        )
 
     if explanations:
-        return "BUSINESS TERMS CONTEXT:\n" + "\n".join(explanations) + "\n"
+        return "**Terms in your query:**\n" + "\n".join(explanations) + "\n"
+
     return ""
 
 
 # ============================================================================
-# ANSWER GENERATION FUNCTIONS
+# MAIN ANSWER GENERATION FUNCTIONS
 # ============================================================================
 
 
@@ -485,79 +432,63 @@ def enhanced_answer_with_source_date(
     target_building: Optional[str] = None
 ) -> Tuple[str, str]:
     """
-    Generate answer with enhanced date awareness and building context.
-    IMPROVED: Better building name extraction from results.
+    Generate an enhanced answer with proper date handling and building awareness.
 
     Args:
         question: User query
         top_result: Top search result
         all_results: All search results
         term_context: Business term context
-        target_building: Optional target building
+        target_building: Optional building context
 
     Returns:
         (answer, publication_info) tuple
     """
-    # Separate results by type
-    planon_results, operational_results = separate_results_by_type(all_results)
-
-    # Get dates
+    # Get dates by document type
     planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
         all_results,
         target_building=target_building
     )
 
+    # Format date information
     date_context, publication_info = format_date_information(
         planon_date, operational_date, operational_doc_key
     )
 
     # Build context
-    context = build_context_from_results(all_results, max_chars=8000)
-
-    # Get building name for context
-    building_name = get_building_name_from_result(top_result)
-    if target_building and building_name == 'Unknown':
-        building_name = target_building
-
-    # Document summary
-    doc_summary = []
-    if planon_results:
-        doc_summary.append(
-            f"{len(planon_results)} property/Planon record(s)")
-    if operational_results:
-        doc_summary.append(
-            f"{len(operational_results)} technical document(s)")
-
-    doc_summary_str = " and ".join(
-        doc_summary) if doc_summary else "documents"
+    context = build_context_string(all_results, max_chars=8000)
 
     # Build term explanation
     term_explanation = build_term_explanation(term_context)
 
+    # Build prompt
+    building_context = f"\nBuilding Context: {target_building}" if target_building else ""
+
     prompt = f"""Your name is Alfred, a helpful assistant at the University of Bristol working in the Smart Technology team.
 
-Answer the user's question using ONLY the context below. The context includes {doc_summary_str}.
+Answer the user's question using ONLY the context below.
 
 {term_explanation}
 
 IMPORTANT DATE INFORMATION:
-- Technical documentation has a "last updated" date - use this for technical/BMS/FRA questions
-- Property condition assessment date is only for building condition information
-- Always prioritise and mention the technical document's last updated date for technical questions
+- Technical documentation (BMS, FRAs, operational docs) has a "last updated" date
+- Property condition assessment data has an "assessment date"
+- For technical questions (BMS, fire safety, systems), ALWAYS prioritise and mention the technical documentation's last updated date
+- The property condition assessment date is ONLY relevant for building condition questions
+- Be clear about which date applies to which type of information
 
-DOCUMENT TYPES:
-- Property/Planon data provides: building characteristics, conditions, facilities information
-- Technical documentation provides: BMS system details, control sequences, equipment specifications, fire safety assessments, operating procedures
-- When answering about technical systems, prioritise the technical documentation
-- When answering about building properties/characteristics, prioritise the property data
+DOCUMENT TYPES IN CONTEXT:
+- Property/Planon data: Building characteristics, conditions, facilities
+- Technical documentation: BMS systems, fire risk assessments, operating procedures
+- Clearly distinguish between these when answering
 
 Question: {question}
+{building_context}
 
 Context: {context}
 
 {date_context}
 
-Building: {building_name}
 Top Result Score: {top_result.get('score', 0):.3f}
 """
 

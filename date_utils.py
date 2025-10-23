@@ -400,14 +400,14 @@ def _fetch_document_chunks(idx, key_value: str, namespace: str) -> List[Dict[str
     # Strategy 2: Semantic search fallback
     logging.debug("Falling back to semantic search...")
 
-    from pinecone_utils import try_inference_search, vector_query
+    from pinecone_utils import vector_query
     from config import DEFAULT_EMBED_MODEL
 
     try:
-        raw = try_inference_search(
-            idx, namespace, key_value, k=50, model_name=None)
-    except Exception:  # pylint: disable=broad-except
         raw = vector_query(idx, namespace, key_value, 50, DEFAULT_EMBED_MODEL)
+    except Exception:  # pylint: disable=broad-except
+        logging.warning("Semantic search also failed for key='%s'", key_value)
+        return []
 
     results = normalise_matches(raw)
 

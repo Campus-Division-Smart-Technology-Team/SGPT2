@@ -7,7 +7,7 @@ Pinecone utilities for index management and search operations.
 from typing import Any, Dict, List, Optional
 import logging
 from clients import pc, oai
-from config import DEFAULT_NAMESPACE, DEFAULT_EMBED_MODEL, SPECIAL_INFERENCE_MODEL
+from config import DEFAULT_NAMESPACE, DEFAULT_EMBED_MODEL
 
 
 def list_index_names() -> List[str]:
@@ -55,44 +55,6 @@ def vector_query(idx, namespace: str, query: str, k: int, embed_model: str) -> D
     """Perform vector search using client-side embeddings."""
     vec = embed_texts([query], embed_model)[0]
     return idx.query(vector=vec, top_k=k, namespace=namespace, include_metadata=True)
-
-
-def try_inference_search(idx, ns: str, q: str, k: int, model_name: Optional[str] = None):
-    """
-    Prefer Pinecone Index.search (server-side inference). If unavailable, embed on
-    server via pc.inference and then Index.query.
-    """
-    if hasattr(idx, "search"):
-        try:
-            return idx.search(namespace=ns, inputs={"text": q}, top_k=k, include_metadata=True)
-        except TypeError:
-            pass
-        except AttributeError:
-            pass
-        except RuntimeError:
-            pass
-        return idx.search(namespace=ns, query={"inputs": {"text": q}, "top_k": k})
-
-    # Fallback: server-side embeddings then query
-    try:
-        embs = pc.inference.embed(
-            model=(model_name or SPECIAL_INFERENCE_MODEL),
-            inputs=[q],
-            parameters={"input_type": "query", "truncate": "END"}
-        )
-        first = embs.data[0]
-        vec = first.get("values") if isinstance(
-            first, dict) else getattr(first, "values", None)
-        if vec is None:
-            vec = first.get("embedding") if isinstance(
-                first, dict) else getattr(first, "embedding", None)
-        if vec is None:
-            raise RuntimeError(
-                "Unexpected embeddings response shape; no vector values found")
-    except Exception as e:  # pylint: disable=broad-except
-        raise RuntimeError(f"Server-side embedding failed: {e}") from e
-
-    return idx.query(vector=vec, top_k=k, namespace=ns, include_metadata=True)
 
 
 def _as_dict(obj: Any) -> Dict[str, Any]:

@@ -197,7 +197,7 @@ def render_sidebar():
                     st.write(f"**Canonical names:** {building_count}")
                     st.write(f"**Aliases/abbreviations:** {alias_count}")
                     st.write(
-                        f"**Total mappings:** {cache_status.get('total_mappings', 0)}")  # come back to this
+                        f"**Total mappings:** {cache_status.get('total_mappings', 0)}")
 
                     # Show sample buildings
                     building_names = get_building_names_from_cache()
@@ -244,8 +244,6 @@ def render_sidebar():
             st.write(f"**Indexes:** {', '.join(TARGET_INDEXES)}")
             st.write(
                 f"**Namespaces:** {'all available' if SEARCH_ALL_NAMESPACES else DEFAULT_NAMESPACE}")
-            st.caption(
-                "Server-side inference is forced for 'apples'; others try inference then vector.")
             st.caption(
                 "Enhanced: Smart query classification, building-aware search with metadata filtering, document-level date search, and relevance threshold.")
             st.caption(

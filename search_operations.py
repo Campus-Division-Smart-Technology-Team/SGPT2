@@ -21,14 +21,12 @@ from config import (
     SEARCH_ALL_NAMESPACES,
     DEFAULT_NAMESPACE,
     DEFAULT_EMBED_MODEL,
-    SPECIAL_INFERENCE_INDEX,
-    SPECIAL_INFERENCE_MODEL,
-    MIN_SCORE_THRESHOLD
+    MIN_SCORE_THRESHOLD,
+    get_index_config
 )
 from pinecone_utils import (
     open_index,
     list_namespaces_for_index,
-    try_inference_search,
     vector_query,
     normalise_matches,
     embed_texts
@@ -233,31 +231,63 @@ def matches_single_building_value(
     if value_norm == target_norm:
         return True
 
-    # Strategy 3: Substring match
-    if target_lower in value_lower or value_lower in target_lower:
-        return True
+    # Strategy 3: Check if value is an alias
+    if _CACHE_POPULATED and _BUILDING_ALIASES_CACHE:
+        canonical_for_value = _BUILDING_ALIASES_CACHE.get(value_lower)
+        canonical_for_target = _BUILDING_ALIASES_CACHE.get(target_lower)
 
-    # Strategy 4: Fuzzy match (80% threshold)
-    if fuzzy_match_score(value, target_building) >= FUZZY_MATCH_THRESHOLD:
-        return True
-
-    # Strategy 5: Check against cached aliases
-    if _CACHE_POPULATED:
-        # Check if value is a known alias
-        canonical_from_value = _BUILDING_ALIASES_CACHE.get(value_lower)
-        canonical_from_target = _BUILDING_ALIASES_CACHE.get(target_lower)
-
-        if canonical_from_value and canonical_from_target:
-            if canonical_from_value == canonical_from_target:
+        # Both map to same canonical
+        if canonical_for_value and canonical_for_target:
+            if canonical_for_value.lower() == canonical_for_target.lower():
                 return True
 
-        # Check if either maps to the other's canonical
-        if canonical_from_value and canonical_from_value.lower() == target_lower:
-            return True
-        if canonical_from_target and canonical_from_target.lower() == value_lower:
+        # Value is an alias for target
+        if canonical_for_value and canonical_for_value.lower() == target_lower:
             return True
 
+        # Target is an alias for value
+        if canonical_for_target and canonical_for_target.lower() == value_lower:
+            return True
+
+    # Strategy 4: Fuzzy matching (80% threshold)
+    similarity = fuzzy_match_score(value_norm, target_norm)
+    if similarity >= FUZZY_MATCH_THRESHOLD:
+        return True
+
+    # Strategy 5: Check for substring match
+    if target_norm in value_norm or value_norm in target_norm:
+        return True
+
     return False
+
+
+def filter_results_by_building(
+    results: List[Dict[str, Any]],
+    target_building: str
+) -> List[Dict[str, Any]]:
+    """
+    Filter results to only include those matching the target building.
+    IMPROVED: Uses enhanced fuzzy matching.
+
+    Args:
+        results: List of search results
+        target_building: Building name to filter by
+
+    Returns:
+        Filtered list of results
+    """
+    if not target_building:
+        return results
+
+    filtered = []
+    for result in results:
+        if matches_building_fuzzy(result, target_building):
+            filtered.append(result)
+
+    logging.info("🏢 Filtered %d/%d results for building '%s'",
+                 len(filtered), len(results), target_building)
+
+    return filtered
 
 
 # ============================================================================
@@ -267,260 +297,170 @@ def matches_single_building_value(
 
 def search_one_index(
     idx_name: str,
-    question: str,
-    k: int,
-    embed_model: Optional[str],
+    query: str,
+    k: int = 5,
+    embed_model: Optional[str] = None,
     building_filter: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Query index with optional building metadata filter.
-    IMPROVED: Uses enhanced metadata filter with fuzzy matching support.
+    Search a single index with building-aware filtering.
 
     Args:
-        idx_name: Pinecone index name
-        question: Query text
+        idx_name: Index name
+        query: Search query
         k: Number of results
-        embed_model: Embedding model (None for inference)
+        embed_model: Embedding model (if None, uses index config)
         building_filter: Optional building name to filter by
 
     Returns:
         List of search results
     """
-    idx = open_index(idx_name)
-    hits: List[Dict[str, Any]] = []
+    try:
+        idx = open_index(idx_name)
+    except Exception as e:  # pylint: disable=broad-except
+        logging.warning("Failed to open index '%s': %s", idx_name, e)
+        return []
 
-    force_inference = (idx_name == SPECIAL_INFERENCE_INDEX)
+    # Get index config
+    index_config = get_index_config(idx_name)
+    if embed_model is None:
+        embed_model = index_config['model']
+
     namespaces = _namespaces_to_search(idx)
+    all_hits = []
+
+    # Create building filter if specified
+    metadata_filter = None
+    if building_filter:
+        metadata_filter = create_building_metadata_filter(building_filter)
+        logging.info("🏢 Created metadata filter for building: %s",
+                     building_filter)
 
     for ns in namespaces:
         try:
-            # Build Pinecone metadata filter
-            pinecone_filter = None
+            # Use vector query for all indexes
+            # Ensure embed_model is never None (already set above from config if it was None)
+            raw = vector_query(
+                idx,
+                namespace=ns,
+                query=query,
+                k=k,
+                embed_model=embed_model  # type: ignore[arg-type]
+            )
+
+            hits = normalise_matches(raw)
+
+            # Apply building filter post-query if we have one
             if building_filter:
-                pinecone_filter = create_building_metadata_filter(
-                    building_filter)
+                hits = filter_results_by_building(hits, building_filter)
 
-                if pinecone_filter:
-                    logging.info(
-                        "Applying building filter for '%s' with %d conditions",
-                        building_filter,
-                        len(pinecone_filter.get('$or', []))
-                    )
-                else:
-                    logging.warning(
-                        "Could not create filter for building '%s'", building_filter)
+            for h in hits:
+                h['index'] = idx_name
+                h['namespace'] = ns
 
-            # Execute search based on mode
-            if force_inference:
-                # Inference mode - may not support filters
-                raw = try_inference_search(
-                    idx, ns, question, k, model_name=SPECIAL_INFERENCE_MODEL
-                )
-                mode_used = "server-side (inference)"
+            all_hits.extend(hits)
 
-                # Apply filter post-query if needed
-                if building_filter:
-                    logging.info(
-                        "Inference search doesn't support filters, will apply fuzzy filter post-query"
-                    )
+        except Exception as e:  # pylint: disable=broad-except
+            logging.warning(
+                "Search failed for index='%s', namespace='%s': %s",
+                idx_name, ns, e
+            )
 
-            else:
-                # Try inference first, fall back to vector query with filter
-                try:
-                    # Try inference without filter first
-                    raw = try_inference_search(
-                        idx, ns, question, k * 2, model_name=None)  # Get more results for filtering
-                    mode_used = "server-side (inference)"
-
-                    # Will apply filter post-query
-                    if building_filter:
-                        logging.info(
-                            "Will apply fuzzy filter post-query for inference results")
-
-                except Exception:  # pylint: disable=broad-except
-                    # Use vector query with filter support
-                    vec = embed_texts(
-                        [question], embed_model or DEFAULT_EMBED_MODEL)[0]
-                    raw = idx.query(
-                        vector=vec,
-                        top_k=k * 2,  # Get more for post-filtering
-                        namespace=ns,
-                        filter=pinecone_filter,  # Filter at query time
-                        include_metadata=True
-                    )
-                    mode_used = "client-side (vector + filter)"
-
-            norm = normalise_matches(raw)
-
-            # Post-query fuzzy filtering
-            if building_filter:
-                original_count = len(norm)
-                norm = [
-                    r for r in norm
-                    if matches_building_fuzzy(r, building_filter)
-                ]
-                filtered_count = len(norm)
-                logging.info(
-                    "Post-query fuzzy filter: %d -> %d results (removed %d)",
-                    original_count,
-                    filtered_count,
-                    original_count - filtered_count
-                )
-
-            for m in norm:
-                m["index"] = idx_name
-                m["namespace"] = ns
-                m["_mode"] = mode_used
-
-            hits.extend(norm)
-
-        except RuntimeError as e:
-            logging.warning("Search failed for %s/%s: %s", idx_name, ns, e)
-            continue
-
-    return hits[:k]  # Return only top k after filtering
+    return all_hits
 
 
-def matches_building(result_building_name: str, target_building: str) -> bool:
+def get_effective_score(result: Dict[str, Any]) -> float:
+    """Get effective score from result (boosted or original)."""
+    return result.get('boosted_score', result.get('score', 0.0))
+
+
+def deduplicate_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Enhanced building matching using cached aliases and fuzzy matching.
-    IMPROVED: Now uses fuzzy matching across metadata fields.
+    Remove duplicate results based on ID, keeping highest score.
 
     Args:
-        result_building_name: Building name from search result
-        target_building: Target building name to match
+        results: List of search results
 
     Returns:
-        True if buildings match
+        Deduplicated results
     """
-    # Use the improved fuzzy matching function
-    result_dict = {'building_name': result_building_name}
-    return matches_building_fuzzy(result_dict, target_building)
+    seen_ids = {}
+    for result in results:
+        result_id = result.get('id')
+        if not result_id:
+            continue
 
+        existing_score = get_effective_score(seen_ids.get(result_id, {}))
+        current_score = get_effective_score(result)
 
-def deduplicate_results(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove duplicate results based on ID."""
-    seen = set()
-    unique = []
-    for h in hits:
-        result_id = h.get('id')
-        if result_id and result_id not in seen:
-            seen.add(result_id)
-            unique.append(h)
-    return unique
+        if result_id not in seen_ids or current_score > existing_score:
+            seen_ids[result_id] = result
 
-
-def get_effective_score(hit: Dict[str, Any]) -> float:
-    """Get effective score (boosted if available, otherwise original)."""
-    return hit.get('_boosted_score', hit.get('score', 0.0))
+    return list(seen_ids.values())
 
 
 def apply_doc_type_boost(
-    hits: List[Dict[str, Any]],
-    doc_type: str,
+    results: List[Dict[str, Any]],
+    target_doc_type: str,
     boost_factor: float = DOC_TYPE_BOOST_FACTOR
 ) -> List[Dict[str, Any]]:
     """
-    Apply score boost to results matching document type.
+    Apply score boost to results matching target document type.
 
     Args:
-        hits: Search results
-        doc_type: Document type to boost
-        boost_factor: Boost multiplier
+        results: Search results
+        target_doc_type: Document type to boost
+        boost_factor: Multiplication factor for boost
 
     Returns:
         Results with boosted scores
     """
-    for hit in hits:
-        hit_doc_type = get_doc_type(hit)
-        if hit_doc_type == doc_type:
-            original_score = hit.get('score', 0.0)
-            boosted_score = original_score * boost_factor
-            hit['_boosted_score'] = boosted_score
-            hit['_doc_type_boost'] = True
-            logging.debug(
-                "Doc type boost: %.3f -> %.3f for %s",
-                original_score,
-                boosted_score,
-                hit.get('id', 'unknown')
-            )
+    for result in results:
+        doc_type = get_doc_type(result)
+        if doc_type == target_doc_type:
+            original_score = result.get('score', 0.0)
+            result['boosted_score'] = original_score * boost_factor
+            result['boost_reason'] = f'document_type:{doc_type}'
 
-    return hits
+    return results
 
 
 def apply_building_boost(
-    hits: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
     target_building: str,
     boost_factor: float = BUILDING_BOOST_FACTOR
 ) -> List[Dict[str, Any]]:
     """
     Apply score boost to results matching target building.
-    IMPROVED: Uses fuzzy matching to determine building matches.
+    IMPROVED: Uses fuzzy matching for building comparison.
 
     Args:
-        hits: Search results
-        target_building: Target building name
-        boost_factor: Boost multiplier
+        results: Search results
+        target_building: Building name to boost
+        boost_factor: Multiplication factor for boost
 
     Returns:
         Results with boosted scores
     """
-    boosted_count = 0
+    if not target_building:
+        return results
 
-    for hit in hits:
-        # Use fuzzy matching to check if building matches
-        if matches_building_fuzzy(hit, target_building):
-            original_score = hit.get('_boosted_score', hit.get('score', 0.0))
-            boosted_score = original_score * boost_factor
-            hit['_boosted_score'] = boosted_score
-            hit['_building_boost'] = True
-            boosted_count += 1
+    for result in results:
+        if matches_building_fuzzy(result, target_building):
+            original_score = result.get(
+                'boosted_score', result.get('score', 0.0))
+            result['boosted_score'] = original_score * boost_factor
+            result['boost_reason'] = result.get(
+                'boost_reason', '') + f';building:{target_building}'
 
-            logging.debug(
-                "Building boost: %.3f -> %.3f for %s (building: %s)",
-                original_score,
-                boosted_score,
-                hit.get('id', 'unknown'),
-                hit.get('building_name', 'unknown')
-            )
+            # Store the matched building name
+            result['building_name'] = target_building
 
-    logging.info("Applied building boost to %d/%d results",
-                 boosted_count, len(hits))
-    return hits
-
-
-def filter_results_by_building(
-    hits: List[Dict[str, Any]],
-    target_building: str
-) -> List[Dict[str, Any]]:
-    """
-    Filter results to only include target building.
-    IMPROVED: Uses fuzzy matching.
-
-    Args:
-        hits: Search results
-        target_building: Target building name
-
-    Returns:
-        Filtered results
-    """
-    filtered = [
-        hit for hit in hits
-        if matches_building_fuzzy(hit, target_building)
-    ]
-
-    logging.info(
-        "Filtered by building '%s': %d -> %d results",
-        target_building,
-        len(hits),
-        len(filtered)
-    )
-
-    return filtered
+    return results
 
 
 # ============================================================================
-# MAIN SEARCH FUNCTION
+# FEDERATED SEARCH
 # ============================================================================
 
 
@@ -529,76 +469,70 @@ def perform_federated_search(
     top_k: int = 5
 ) -> Tuple[List[Dict[str, Any]], str, str, bool]:
     """
-    Perform federated search with building-aware filtering and business term detection.
-    IMPROVED: Uses enhanced fuzzy building matching.
+    Perform federated search across multiple indexes with building-aware filtering.
+    IMPROVED: Two-stage search strategy with metadata filtering.
 
     Args:
         query: User query
-        top_k: Number of top results to return
+        top_k: Number of results to return
 
     Returns:
         (results, answer, publication_date_info, score_too_low)
     """
-    logging.info("🔍 Federated search: '%s' (k=%d)", query, top_k)
+    logging.info("🔍 Starting federated search: '%s' (top_k=%d)", query, top_k)
 
-    # ===== QUERY ENHANCEMENT =====
-    # Detect building
+    # Detect building and business terms
     target_building = extract_building_from_query(query)
-    if target_building:
-        logging.info("🏢 Detected building: '%s'", target_building)
-
-    # Detect business terms
     enhanced_query, term_context = BusinessTermMapper.enhance_query_with_terms(
         query)
+
+    # Get document type filter if available
     doc_type_filter = None
-
     if term_context:
-        detected_terms = list(term_context.keys())
-        logging.info("📚 Detected business terms: %s", detected_terms)
-
-        # Get document type from first detected term
         first_term = list(term_context.values())[0]
         doc_type_filter = first_term.get('document_type')
-        logging.info("📄 Document type filter: %s", doc_type_filter)
 
-    # ===== TWO-STAGE SEARCH STRATEGY =====
+    logging.info("🏢 Detected building: %s", target_building or "None")
+    logging.info("📋 Document type filter: %s", doc_type_filter or "None")
+    logging.info("🔧 Enhanced query: %s", enhanced_query)
+
+    # ===== STAGE 1: Try metadata-filtered search if building detected =====
     all_hits = []
     used_filter = False
 
-    # Stage 1: Try filtered search if building detected
     if target_building:
         logging.info(
-            "🎯 Stage 1: Filtered search for building '%s'", target_building)
+            "🎯 STAGE 1: Attempting building-specific search with metadata filter")
 
         for idx_name in TARGET_INDEXES:
             hits = search_one_index(
                 idx_name,
                 enhanced_query,
-                top_k * 2,  # Get more results
+                top_k * 3,
                 embed_model=None,
                 building_filter=target_building
             )
             all_hits.extend(hits)
 
-        all_hits = deduplicate_results(all_hits)
-
+        # Check if we got enough results
         if all_hits:
+            all_hits = deduplicate_results(all_hits)
+            logging.info("✅ STAGE 1 returned %d results", len(all_hits))
             used_filter = True
-            logging.info(
-                "✅ Stage 1 success: %d results with filter", len(all_hits))
         else:
-            logging.info(
-                "⚠️  Stage 1: No results with filter, proceeding to Stage 2")
+            logging.warning(
+                "⚠️ STAGE 1 returned no results, proceeding to STAGE 2")
 
-    # Stage 2: Unfiltered search with post-query boosting
+    # ===== STAGE 2: Semantic search without filter (fallback or no building) =====
     if not all_hits:
-        logging.info("🌐 Stage 2: Unfiltered search with boosting")
+        logging.info(
+            "🔍 STAGE 2: Performing semantic search across all indexes")
 
         for idx_name in TARGET_INDEXES:
             hits = search_one_index(
                 idx_name,
                 enhanced_query,
-                top_k * 3,  # Fetch more for better boosting results
+                top_k * 3,
                 embed_model=None,
                 building_filter=None  # No filter in Stage 2
             )

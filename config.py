@@ -24,29 +24,26 @@ except Exception:  # pylint: disable=broad-except
     pass
 
 # ----- Config Constants -----
-SPECIAL_INFERENCE_INDEX = "apples"
-SPECIAL_INFERENCE_MODEL = "llama-text-embed-v2"
 DEFAULT_NAMESPACE = "__default__"
 
-TARGET_INDEXES = ["apples", "operational-docs"]  # federated search targets
+TARGET_INDEXES = ["operational-docs"]  # federated search targets
 SEARCH_ALL_NAMESPACES = True
 
 DEFAULT_EMBED_MODEL = os.getenv(
     "DEFAULT_EMBED_MODEL", "text-embedding-3-small")
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
+
 # Index-specific configurations
 INDEX_CONFIGS = {
-    "apples": {
-        "model": "llama-text-embed-v2",
-        "dimension": 1024
-    },
     "operational-docs": {
         "model": "text-embedding-3-small",
         "dimension": 1536
     }
 }
+
 # Default dimension (for text-embedding-3-small)
 DIMENSION = 1536
+
 # Minimum score threshold for responses
 MIN_SCORE_THRESHOLD = 0.3
 
