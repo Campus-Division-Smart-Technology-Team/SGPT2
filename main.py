@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Main Streamlit application for Alfred the Gorilla chatbot.
-Enhanced with intelligent query classification, federated search, and building cache initialisation.
-Optimised version with reduced duplication and better error handling.
+IMPROVED VERSION: Dynamic building cache initialisation across all indexes.
 """
 
 import logging
@@ -19,9 +18,8 @@ from ui_components import (
 from query_classifier import should_search_index
 from search_operations import perform_federated_search
 from building_utils import (
-    populate_building_cache_from_index,
-    _CACHE_POPULATED,
-    get_cache_status
+    populate_building_cache_from_multiple_indexes, get_cache_status,
+    get_indexes_with_buildings
 )
 from pinecone_utils import open_index
 from config import TARGET_INDEXES, DEFAULT_NAMESPACE
@@ -49,50 +47,70 @@ logging.basicConfig(level=logging.INFO)
 
 
 # ============================================================================
-# INITIALIZATION
+# INITIALISATION
 # ============================================================================
 
 
 @st.cache_resource
 def initialise_building_cache():
     """
-    Initialise building name cache from Pinecone.
-    Cached to run only once per session.
+    Initialise building name cache from ALL Pinecone indexes.
+    IMPROVED: Tries all indexes and aggregates results.
 
     Returns:
-        True if cache initialised successfully, False otherwise
+        Dictionary with cache status
     """
     try:
-        # Use the first available index
-        for idx_name in TARGET_INDEXES:
-            try:
-                logging.info(
-                    "Attempting to initialise building cache from index '%s'", idx_name)
-                idx = open_index(idx_name)
-                populate_building_cache_from_index(idx, DEFAULT_NAMESPACE)
+        # Check if already populated
+        cache_status = get_cache_status()
+        if cache_status['populated']:
+            logging.info(
+                "Building cache already populated, skipping initialisation")
+            return cache_status
 
-                if _CACHE_POPULATED:
-                    cache_status = get_cache_status()
-                    logging.info(
-                        "✅ Building cache initialised from index '%s': %d canonical names, %d aliases",
-                        idx_name,
-                        cache_status['canonical_names'],
-                        cache_status['aliases']
-                    )
-                    return True
-            except Exception as e:  # pylint: disable=broad-except
-                logging.warning(
-                    "Failed to init cache from %s: %s", idx_name, e)
-                continue
+        # Try to populate from ALL indexes (not just the first one)
+        logging.info(
+            "Initialising building cache from %d indexes...", len(TARGET_INDEXES))
 
-        logging.warning(
-            "⚠️ Could not initialise building cache from any index")
-        return False
+        results = populate_building_cache_from_multiple_indexes(
+            TARGET_INDEXES,
+            DEFAULT_NAMESPACE
+        )
+
+        # Check final cache status
+        cache_status = get_cache_status()
+
+        if cache_status['populated']:
+            indexes_with_data = cache_status.get('indexes_with_buildings', [])
+            logging.info(
+                "✅ Building cache initialised: %d canonical names, %d aliases from %d index(es)",
+                cache_status['canonical_names'],
+                cache_status['aliases'],
+                len(indexes_with_data)
+            )
+
+            # Log which indexes have building data
+            for idx_name, count in results.items():
+                if count > 0:
+                    logging.info("  - '%s': %d buildings", idx_name, count)
+
+            return cache_status
+        else:
+            logging.warning(
+                "⚠️  Could not initialise building cache from any of %d indexes",
+                len(TARGET_INDEXES)
+            )
+            return cache_status
 
     except Exception as e:  # pylint: disable=broad-except
         logging.error("Error initialising building cache: %s",
                       e, exc_info=True)
-        return False
+        return {
+            'populated': False,
+            'canonical_names': 0,
+            'aliases': 0,
+            'indexes_with_buildings': []
+        }
 
 
 # ============================================================================
@@ -125,13 +143,6 @@ def render_result_item(
 ):
     """
     Render a single search result item.
-    Centralized rendering to avoid duplication.
-
-    Args:
-        result: Search result dictionary
-        index: 1-based index for display
-        is_top: Whether this is the top result (adds highlight)
-        max_snippet_length: Maximum length of text snippet to display
     """
     if is_top:
         st.markdown(
@@ -172,14 +183,21 @@ def main():
     setup_page_config()
     render_custom_css()
 
-    # Initialize building cache
-    cache_initialised = initialise_building_cache()
+    # Initialise building cache
+    cache_status = initialise_building_cache()
 
-    if not cache_initialised:
+    if not cache_status['populated']:
         st.warning(
             "⚠️ Building name cache could not be initialised. "
             "Building name detection may be limited to pattern matching."
         )
+    else:
+        indexes_with_buildings = cache_status.get('indexes_with_buildings', [])
+        if indexes_with_buildings:
+            st.success(
+                f"✅ Building data loaded from {len(indexes_with_buildings)} index(es): "
+                f"{', '.join(indexes_with_buildings)}"
+            )
 
     render_header()
 
@@ -189,7 +207,7 @@ def main():
     # Render sidebar and get settings
     top_k = render_sidebar()
 
-    # Initialize and display chat
+    # Initialise and display chat
     initialise_chat_history()
     display_chat_history()
 
@@ -202,7 +220,7 @@ def main():
 
 def handle_chat_input(top_k: int):
     """Handle new chat input from user."""
-    query = st.chat_input("Ask me about apple(s), BMS or FRAs...")
+    query = st.chat_input("Ask me about BMS or FRAs...")
 
     if not query:
         return

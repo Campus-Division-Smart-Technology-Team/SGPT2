@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Date parsing and publication date search utilities.
-Optimized version with pre-compiled patterns and better validation.
+Optimised version with pre-compiled patterns and better validation.
 """
 
 import re

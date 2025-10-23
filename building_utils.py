@@ -2,13 +2,19 @@
 # -*- coding: utf-8 -*-
 """
 Building name extraction and lookup utilities with dynamic Pinecone index support.
-Optimised version with pre-compiled patterns, cached lookups, and alias support.
+IMPROVED VERSION: Enhanced fuzzy matching against multiple metadata fields.
+
+Key improvements:
+- Fuzzy matching (80% threshold) against multiple metadata fields
+- Support for Property names, UsrFRACondensedPropertyName, building_name, canonical_building_name
+- Enhanced metadata search strategy for better building detection
+- Better handling of variations and aliases
 """
 
 import re
 import json
-from typing import Optional, List, Dict, Any
-from difflib import get_close_matches
+from typing import Optional, List, Dict, Any, Set
+from difflib import get_close_matches, SequenceMatcher
 from functools import lru_cache
 import logging
 
@@ -16,31 +22,169 @@ import logging
 # BUILDING NAME CACHE (populated from Pinecone at startup)
 # ============================================================================
 
-_BUILDING_NAMES_CACHE: Dict[str, str] = {}  # normalized -> canonical
+_BUILDING_NAMES_CACHE: Dict[str, str] = {}  # normalised -> canonical
 _BUILDING_ALIASES_CACHE: Dict[str, str] = {}  # alias -> canonical
+# canonical -> set of all known variations from metadata
+_METADATA_FIELDS_CACHE: Dict[str, Set[str]] = {}
 _CACHE_POPULATED = False
+_INDEXES_WITH_BUILDINGS: List[str] = []
+
+# Metadata fields to search for building names (in priority order)
+BUILDING_METADATA_FIELDS = [
+    'canonical_building_name',
+    'building_name',
+    'Property names',
+    'UsrFRACondensedPropertyName',
+    'building_aliases'
+]
+
+# Fuzzy match threshold (80% similarity)
+FUZZY_MATCH_THRESHOLD = 0.80
+
+# ============================================================================
+# BUILDING PATTERNS (for query extraction)
+# ============================================================================
+
+# Common building name patterns
+BUILDING_PATTERNS = [
+    # "at <building>" pattern
+    re.compile(
+        r'\bat\s+([A-Z][A-Za-z\s\-\']+(?:Building|House|Hall|Centre|Center|Complex|Tower)?)', re.IGNORECASE),
+    # "in <building>" pattern
+    re.compile(
+        r'\bin\s+([A-Z][A-Za-z\s\-\']+(?:Building|House|Hall|Centre|Center|Complex|Tower)?)', re.IGNORECASE),
+    # "for <building>" pattern
+    re.compile(
+        r'\bfor\s+([A-Z][A-Za-z\s\-\']+(?:Building|House|Hall|Centre|Center|Complex|Tower)?)', re.IGNORECASE),
+    # "<building> building/house" pattern
+    re.compile(
+        r'\b([A-Z][A-Za-z\s\-\']+)\s+(?:Building|House|Hall|Centre|Center)', re.IGNORECASE),
+    # Capitalized words (potential building names)
+    re.compile(r'\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b'),
+]
+
+# Question words to filter out
+QUESTION_WORDS = frozenset({
+    'what', 'when', 'where', 'which', 'who', 'how', 'why', 'tell', 'show',
+    'find', 'search', 'get', 'give', 'list', 'are', 'is', 'do', 'does',
+    'can', 'could', 'would', 'should', 'fire', 'risk', 'assessment'
+})
+
+# Minimum length for building names
+MIN_BUILDING_NAME_LENGTH = 3
 
 
-def populate_building_cache_from_index(idx, namespace: str = "__default__"):
+# ============================================================================
+# CACHE MANAGEMENT
+# ============================================================================
+
+
+def populate_building_cache_from_multiple_indexes(
+    index_names: List[str],
+    namespace: str = "__default__"
+) -> Dict[str, int]:
+    """
+    Populate building name cache from multiple Pinecone indexes.
+    Tries all indexes and aggregates results.
+
+    Args:
+        index_names: List of index names to try
+        namespace: Namespace to query
+
+    Returns:
+        Dictionary mapping index names to number of buildings found
+    """
+    global _CACHE_POPULATED, _INDEXES_WITH_BUILDINGS
+
+    results = {}
+    total_buildings = 0
+
+    # Import here to avoid circular dependency
+    from pinecone_utils import open_index
+
+    for idx_name in index_names:
+        try:
+            logging.info("Trying to populate cache from index '%s'", idx_name)
+            idx = open_index(idx_name)
+            buildings_found = populate_building_cache_from_index(
+                idx, namespace, index_name=idx_name, skip_if_populated=False
+            )
+
+            results[idx_name] = buildings_found
+            total_buildings += buildings_found
+
+            if buildings_found > 0:
+                _INDEXES_WITH_BUILDINGS.append(idx_name)
+                logging.info("✅ Index '%s' has building data (%d buildings)",
+                             idx_name, buildings_found)
+            else:
+                logging.info("⚠️  Index '%s' has no building data", idx_name)
+
+        except Exception as e:  # pylint: disable=broad-except
+            logging.warning("Failed to check index '%s': %s", idx_name, e)
+            results[idx_name] = 0
+
+    if total_buildings > 0:
+        _CACHE_POPULATED = True
+        logging.info(
+            "✅ Building cache initialised from %d/%d indexes: %d total buildings",
+            len(_INDEXES_WITH_BUILDINGS),
+            len(index_names),
+            total_buildings
+        )
+    else:
+        logging.warning(
+            "⚠️  No building data found in any of %d indexes",
+            len(index_names)
+        )
+        _CACHE_POPULATED = False
+
+    return results
+
+
+def populate_building_cache_from_index(
+    idx,
+    namespace: str = "__default__",
+    index_name: Optional[str] = None,
+    skip_if_populated: bool = True
+) -> int:
     """
     Populate building name cache from Pinecone index metadata.
-    Call this once at application startup.
+    IMPROVED: Extracts data from multiple metadata fields.
 
     Args:
         idx: Pinecone index object
         namespace: Namespace to query
+        index_name: Name of the index (optional)
+        skip_if_populated: If True, skip if cache already populated
+
+    Returns:
+        Number of buildings found in this index
     """
-    global _BUILDING_NAMES_CACHE, _BUILDING_ALIASES_CACHE, _CACHE_POPULATED
+    global _BUILDING_NAMES_CACHE, _BUILDING_ALIASES_CACHE, _METADATA_FIELDS_CACHE, _CACHE_POPULATED
 
-    if _CACHE_POPULATED:
+    if skip_if_populated and _CACHE_POPULATED:
         logging.info("Building cache already populated, skipping")
-        return
+        return len(set(_BUILDING_NAMES_CACHE.values()))
 
-    logging.info("Populating building cache from Pinecone index...")
+    logging.info("Attempting to populate building cache from index '%s'...",
+                 index_name or "unknown")
 
     try:
+        # Import config here to avoid circular imports
+        from config import get_index_config
+
+        # Determine the index name
+        resolved_index_name: str = index_name or 'operational-docs'
+
+        # Get the correct dimension for this index
+        index_config = get_index_config(resolved_index_name)
+        dimension = index_config['dimension']
+        logging.info("Using dimension %d for index '%s'",
+                     dimension, resolved_index_name)
+
         # Query for Planon data records
-        dummy_vector = [0.0] * 1536  # Adjust dimension as needed
+        dummy_vector = [0.0] * dimension
         results = idx.query(
             vector=dummy_vector,
             filter={"document_type": {"$eq": "planon_data"}},
@@ -49,140 +193,315 @@ def populate_building_cache_from_index(idx, namespace: str = "__default__"):
             include_metadata=True
         )
 
-        canonical_names = set()
+        matches = results.get("matches", [])
+        if not matches:
+            logging.info("No planon_data found in index '%s'",
+                         resolved_index_name)
+            return 0
 
-        for match in results.get("matches", []):
+        canonical_names = set()
+        new_names_count = 0
+        new_aliases_count = 0
+        new_metadata_fields_count = 0
+
+        for match in matches:
             metadata = match.get("metadata", {})
 
-            # Get canonical name
-            canonical = metadata.get("canonical_building_name") or \
-                metadata.get("building_name")
+            # Extract canonical name (priority order)
+            canonical = None
+            for field in ['canonical_building_name', 'building_name']:
+                if metadata.get(field):
+                    canonical = metadata[field]
+                    break
 
             if not canonical:
                 continue
 
             canonical_names.add(canonical)
 
-            # Map normalized canonical name
-            normalized = canonical.lower().strip()
-            _BUILDING_NAMES_CACHE[normalized] = canonical
+            # Initialise metadata fields set for this building
+            if canonical not in _METADATA_FIELDS_CACHE:
+                _METADATA_FIELDS_CACHE[canonical] = set()
 
-            # Map aliases
-            aliases = metadata.get("building_aliases", [])
-            if isinstance(aliases, list):
-                for alias in aliases:
-                    if alias:
-                        alias_norm = str(alias).lower().strip()
-                        _BUILDING_ALIASES_CACHE[alias_norm] = canonical
-            elif isinstance(aliases, str):
-                # Handle case where aliases might be stored as string
-                try:
-                    alias_list = json.loads(aliases)  # This now works
-                    for alias in alias_list:
-                        if alias:
-                            alias_norm = str(alias).lower().strip()
-                            _BUILDING_ALIASES_CACHE[alias_norm] = canonical
-                except (json.JSONDecodeError, TypeError):
-                    # If not JSON, treat as single alias
-                    alias_norm = aliases.lower().strip()
-                    _BUILDING_ALIASES_CACHE[alias_norm] = canonical
+            # Map normalised canonical name
+            normalised = canonical.lower().strip()
+            if normalised not in _BUILDING_NAMES_CACHE:
+                _BUILDING_NAMES_CACHE[normalised] = canonical
+                new_names_count += 1
 
-        _CACHE_POPULATED = True
+            # Add canonical to metadata fields
+            _METADATA_FIELDS_CACHE[canonical].add(canonical)
+            _METADATA_FIELDS_CACHE[canonical].add(normalised)
 
-        logging.info(
-            "Building cache populated: %d canonical names, %d aliases",
-            len(canonical_names),
-            len(_BUILDING_ALIASES_CACHE)
-        )
+            # Extract and store ALL variations from metadata fields
+            for field in BUILDING_METADATA_FIELDS:
+                field_value = metadata.get(field)
+
+                if not field_value:
+                    continue
+
+                # Handle list of values
+                if isinstance(field_value, list):
+                    for value in field_value:
+                        if value:
+                            value_str = str(value).strip()
+                            if value_str:
+                                value_norm = value_str.lower()
+                                _METADATA_FIELDS_CACHE[canonical].add(
+                                    value_str)
+                                _METADATA_FIELDS_CACHE[canonical].add(
+                                    value_norm)
+
+                                # Also add to aliases cache
+                                if value_norm not in _BUILDING_ALIASES_CACHE:
+                                    _BUILDING_ALIASES_CACHE[value_norm] = canonical
+                                    new_aliases_count += 1
+
+                                new_metadata_fields_count += 1
+
+                # Handle string (might be JSON)
+                elif isinstance(field_value, str):
+                    # Try to parse as JSON first
+                    try:
+                        value_list = json.loads(field_value)
+                        if isinstance(value_list, list):
+                            for value in value_list:
+                                if value:
+                                    value_str = str(value).strip()
+                                    if value_str:
+                                        value_norm = value_str.lower()
+                                        _METADATA_FIELDS_CACHE[canonical].add(
+                                            value_str)
+                                        _METADATA_FIELDS_CACHE[canonical].add(
+                                            value_norm)
+
+                                        if value_norm not in _BUILDING_ALIASES_CACHE:
+                                            _BUILDING_ALIASES_CACHE[value_norm] = canonical
+                                            new_aliases_count += 1
+
+                                        new_metadata_fields_count += 1
+                        else:
+                            # Single value from JSON
+                            value_str = str(value_list).strip()
+                            if value_str:
+                                value_norm = value_str.lower()
+                                _METADATA_FIELDS_CACHE[canonical].add(
+                                    value_str)
+                                _METADATA_FIELDS_CACHE[canonical].add(
+                                    value_norm)
+
+                                if value_norm not in _BUILDING_ALIASES_CACHE:
+                                    _BUILDING_ALIASES_CACHE[value_norm] = canonical
+                                    new_aliases_count += 1
+
+                                new_metadata_fields_count += 1
+                    except (json.JSONDecodeError, TypeError):
+                        # Not JSON, treat as single string value
+                        value_str = field_value.strip()
+                        if value_str:
+                            value_norm = value_str.lower()
+                            _METADATA_FIELDS_CACHE[canonical].add(value_str)
+                            _METADATA_FIELDS_CACHE[canonical].add(value_norm)
+
+                            if value_norm not in _BUILDING_ALIASES_CACHE:
+                                _BUILDING_ALIASES_CACHE[value_norm] = canonical
+                                new_aliases_count += 1
+
+                            new_metadata_fields_count += 1
+
+        buildings_found = len(canonical_names)
+
+        if buildings_found > 0:
+            _CACHE_POPULATED = True
+            logging.info(
+                "✅ Index '%s': Found %d buildings (%d canonical names, %d aliases, %d metadata fields)",
+                resolved_index_name,
+                buildings_found,
+                new_names_count,
+                new_aliases_count,
+                new_metadata_fields_count
+            )
+        else:
+            logging.info(
+                "⚠️  Index '%s': No building data found",
+                resolved_index_name
+            )
+
+        return buildings_found
 
     except Exception as e:  # pylint: disable=broad-except
-        logging.error("Failed to populate building cache: %s",
-                      e, exc_info=True)
-        _CACHE_POPULATED = False
+        logging.warning(
+            "Failed to populate building cache from index '%s': %s",
+            index_name or "unknown",
+            e
+        )
+        return 0
 
 
-def get_building_names_from_cache() -> List[str]:
-    """Get list of canonical building names from cache."""
-    return list(set(_BUILDING_NAMES_CACHE.values()))
+def get_indexes_with_buildings() -> List[str]:
+    """
+    Get list of indexes that have building data.
 
-
-def clear_building_cache():
-    """Clear building name cache (useful for testing or reloading)."""
-    global _BUILDING_NAMES_CACHE, _BUILDING_ALIASES_CACHE, _CACHE_POPULATED
-    _BUILDING_NAMES_CACHE = {}
-    _BUILDING_ALIASES_CACHE = {}
-    _CACHE_POPULATED = False
-    logging.info("Building cache cleared")
+    Returns:
+        List of index names with building data
+    """
+    return _INDEXES_WITH_BUILDINGS.copy()
 
 
 def get_cache_status() -> Dict[str, Any]:
-    """Get building cache status for debugging."""
+    """
+    Get current cache status and statistics.
+
+    Returns:
+        Dictionary with cache information
+    """
     return {
-        "populated": _CACHE_POPULATED,
-        "canonical_names": len(set(_BUILDING_NAMES_CACHE.values())),
-        "total_mappings": len(_BUILDING_NAMES_CACHE),
-        "aliases": len(_BUILDING_ALIASES_CACHE),
+        'populated': _CACHE_POPULATED,
+        'canonical_names': len(set(_BUILDING_NAMES_CACHE.values())),
+        'aliases': len(_BUILDING_ALIASES_CACHE),
+        'metadata_fields_count': sum(len(fields) for fields in _METADATA_FIELDS_CACHE.values()),
+        'indexes_with_buildings': _INDEXES_WITH_BUILDINGS.copy()
     }
 
 
-# ============================================================================
-# MODULE-LEVEL CONSTANTS (compiled once at import time)
-# ============================================================================
+def clear_building_cache():
+    """Clear all building cache data."""
+    global _BUILDING_NAMES_CACHE, _BUILDING_ALIASES_CACHE, _METADATA_FIELDS_CACHE
+    global _CACHE_POPULATED, _INDEXES_WITH_BUILDINGS
 
-# Pre-compile regex patterns for efficiency
-# Pre-compile regex patterns for efficiency
-BUILDING_PATTERNS = [
-    # Pattern for "at/in/for/about [Building]" - most reliable
-    re.compile(
-        r'(?:at|in|for|about|from)\s+([A-Z0-9][A-Za-z0-9\s\-]+?)(?:\s+(?:building|bms|controls|have|has)|\?|$|\.)',
-        re.IGNORECASE
-    ),
-    # Pattern for addresses with numbers: "1-9 Old Park Hill"
-    re.compile(
-        r'\b(\d+(?:-\d+)?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b',
-        re.IGNORECASE
-    ),
-    # Pattern for "building/property/site [Name]"
-    re.compile(
-        r'(?:building|property|site)\s+([A-Z0-9][A-Za-z0-9\s]+?)(?:\s+(?:building|bms|controls|system)|\?|$)',
-        re.IGNORECASE
-    ),
-    # Pattern for proper nouns (two capitalized words) - BUT not at sentence start
-    re.compile(
-        r'(?<!^)(?<!\.\s)\b([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-        re.IGNORECASE
-    ),
-]
+    _BUILDING_NAMES_CACHE.clear()
+    _BUILDING_ALIASES_CACHE.clear()
+    _METADATA_FIELDS_CACHE.clear()
+    _CACHE_POPULATED = False
+    _INDEXES_WITH_BUILDINGS.clear()
 
-# Pre-compiled normalization patterns
-NORMALIZATION_PATTERNS = [
-    re.compile(r'\s+BMS.*$', re.IGNORECASE),
-    re.compile(r'\s+Controls.*$', re.IGNORECASE),
-    re.compile(r'\s+Project.*$', re.IGNORECASE),
-    re.compile(r'\s+Manual.*$', re.IGNORECASE),
-    re.compile(r'\s+-\s+.*$', re.IGNORECASE),
-    re.compile(r'\s+FRA.*$', re.IGNORECASE),
-]
+    logging.info("Building cache cleared")
 
-# Pre-compile article removal pattern
-ARTICLE_PATTERN = re.compile(r'\s+(the|a|an)$', re.IGNORECASE)
 
-# Minimum building name length for filtering
-MIN_BUILDING_NAME_LENGTH = 3  # Reduced from 4 to catch "SHB" and similar
+def get_building_names_from_cache() -> List[str]:
+    """
+    Get all canonical building names from cache.
 
-# Stop words to skip (question/action words that aren't buildings)
-QUESTION_WORDS = frozenset({
-    'tell', 'does', 'do', 'did', 'can', 'could', 'would', 'should',
-    'will', 'what', 'when', 'where', 'who', 'why', 'how', 'which',
-    'is', 'are', 'was', 'were', 'has', 'have', 'had', 'show', 'list',
-    'find', 'get', 'give', 'make', 'help', 'please', 'provide', 'need',
-    'looking', 'searching', 'information', 'info', 'about', 'on', 'for',
-    'at', 'in', 'of', 'the', 'a', 'an', 'hello', 'hi', 'me'
-})
+    Returns:
+        List of canonical building names
+    """
+    return list(set(_BUILDING_NAMES_CACHE.values()))
 
 
 # ============================================================================
-# CORE FUNCTIONS
+# FUZZY MATCHING FUNCTIONS
+# ============================================================================
+
+
+def fuzzy_match_score(str1: str, str2: str) -> float:
+    """
+    Calculate fuzzy match score between two strings.
+
+    Args:
+        str1: First string
+        str2: Second string
+
+    Returns:
+        Similarity score between 0.0 and 1.0
+    """
+    return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+
+
+def find_fuzzy_matches(
+    query: str,
+    candidates: List[str],
+    threshold: float = FUZZY_MATCH_THRESHOLD
+) -> List[tuple[str, float]]:
+    """
+    Find fuzzy matches from a list of candidates.
+
+    Args:
+        query: Query string
+        candidates: List of candidate strings
+        threshold: Minimum similarity threshold (default 0.80)
+
+    Returns:
+        List of (candidate, score) tuples sorted by score descending
+    """
+    query_lower = query.lower().strip()
+    matches = []
+
+    for candidate in candidates:
+        score = fuzzy_match_score(query_lower, candidate)
+        if score >= threshold:
+            matches.append((candidate, score))
+
+    # Sort by score descending
+    matches.sort(key=lambda x: x[1], reverse=True)
+    return matches
+
+
+def fuzzy_match_against_metadata_fields(
+    query: str,
+    canonical_name: str,
+    threshold: float = FUZZY_MATCH_THRESHOLD
+) -> Optional[tuple[str, float]]:
+    """
+    Fuzzy match query against all metadata field variations for a building.
+
+    Args:
+        query: Query string to match
+        canonical_name: Canonical building name
+        threshold: Minimum similarity threshold
+
+    Returns:
+        (matched_field, score) tuple or None if no match
+    """
+    if canonical_name not in _METADATA_FIELDS_CACHE:
+        return None
+
+    metadata_fields = _METADATA_FIELDS_CACHE[canonical_name]
+    matches = find_fuzzy_matches(query, list(metadata_fields), threshold)
+
+    if matches:
+        return matches[0]  # Return best match
+    return None
+
+
+# ============================================================================
+# BUILDING NAME NORMALIZATION
+# ============================================================================
+
+
+@lru_cache(maxsize=256)
+def normalise_building_name(name: str) -> str:
+    """
+    Normalise building name for matching.
+
+    Args:
+        name: Building name
+
+    Returns:
+        Normalised building name
+    """
+    if not name:
+        return ""
+
+    # Convert to lowercase
+    normalised = name.lower()
+
+    # Remove common suffixes
+    suffixes_to_remove = [
+        ' building', ' house', ' hall', ' centre', ' center',
+        ' complex', ' tower', ' block', ' wing'
+    ]
+    for suffix in suffixes_to_remove:
+        if normalised.endswith(suffix):
+            normalised = normalised[:-len(suffix)].strip()
+
+    # Remove extra whitespace
+    normalised = ' '.join(normalised.split())
+
+    return normalised
+
+
+# ============================================================================
+# BUILDING EXTRACTION FROM QUERY
 # ============================================================================
 
 
@@ -193,170 +512,74 @@ def extract_building_from_query(
 ) -> Optional[str]:
     """
     Extract building name from user query using multiple strategies.
-    Uses cached building data from Pinecone if available.
+    IMPROVED: Uses fuzzy matching against metadata fields.
 
     Args:
         query: User query string
-        known_buildings: Optional list of known building names for fuzzy matching
-        use_cache: Whether to use cached building names (default True)
+        known_buildings: Optional list of known building names
+        use_cache: Whether to use cached building data
 
     Returns:
-        Canonical building name or None if not found
+        Canonical building name if found, None otherwise
     """
-    if not query:
+    if not query or not query.strip():
         return None
 
-    query_lower = query.lower()
-
-    # Strategy 1: Check cached canonical names (exact substring match)
+    # Try cache if enabled
     if use_cache and _CACHE_POPULATED:
-        for normalized, canonical in _BUILDING_NAMES_CACHE.items():
-            # Check if building name appears as whole words in query
-            pattern = r'\b' + re.escape(normalized) + r'\b'
-            if re.search(pattern, query_lower):
-                logging.info(
-                    "Found building in query (canonical): '%s'", canonical)
-                return canonical
+        known_buildings = get_building_names_from_cache()
+    elif use_cache and not _CACHE_POPULATED:
+        logging.debug("Building cache not populated, extraction limited")
+        return None
 
-    # Strategy 2: Check aliases
-    if use_cache and _CACHE_POPULATED:
-        for alias_norm, canonical in _BUILDING_ALIASES_CACHE.items():
-            # Check for exact alias match
-            pattern = r'\b' + re.escape(alias_norm) + r'\b'
-            if re.search(pattern, query_lower):
-                logging.info("Found building via alias '%s' -> '%s'",
-                             alias_norm, canonical)
-                return canonical
+    if not known_buildings:
+        return None
 
-    # Strategy 3: Pattern-based extraction
-    building_candidate = _extract_with_patterns(query)
-    if building_candidate:
-        # Try to match against cache
-        if use_cache and _CACHE_POPULATED:
-            matched = find_closest_building_name(
-                building_candidate,
-                get_building_names_from_cache()
-            )
-            if matched:
-                logging.info("Pattern extracted and matched: '%s' -> '%s'",
-                             building_candidate, matched)
-                return matched
-
-        # Try against provided known_buildings
-        if known_buildings:
-            matched = find_closest_building_name(
-                building_candidate, known_buildings)
-            if matched:
-                logging.info("Pattern extracted and matched (known): '%s' -> '%s'",
-                             building_candidate, matched)
-                return matched
-
-        logging.info("Pattern extracted (no match): '%s'", building_candidate)
-        return building_candidate
-
-    # Strategy 4: Search in known buildings (only if provided)
-    if known_buildings:
-        result = _find_in_known_buildings(query_lower, known_buildings)
-        if result:
-            logging.info("Found known building in query: '%s'", result)
-            return result
-
-    return None
-
-
-def _extract_with_patterns(query: str) -> Optional[str]:
-    """
-    Extract building name using pre-compiled regex patterns.
-    Helper function to keep main function clean.
-    """
+    # Try patterns to extract potential building name
+    extracted_name = None
     for pattern in BUILDING_PATTERNS:
-        match = pattern.search(query)
-        if match:
-            building_candidate = match.group(1).strip()
+        matches = pattern.findall(query)
+        if matches:
+            # Get the first match
+            candidate = matches[0] if isinstance(
+                matches[0], str) else matches[0][0]
+            candidate = candidate.strip()
 
-            # Clean up the candidate
-            building_candidate = ARTICLE_PATTERN.sub('', building_candidate)
+            # Filter out question words and short names
+            if (candidate.lower() not in QUESTION_WORDS and
+                    len(candidate) >= MIN_BUILDING_NAME_LENGTH):
+                extracted_name = candidate
+                break
 
-            if not building_candidate:
-                continue
+    if not extracted_name:
+        logging.debug("No building pattern match found in query")
+        return None
 
-            # Skip if ANY word is a question word (not just the first)
-            words = building_candidate.lower().split()
-            if any(word in QUESTION_WORDS for word in words):
-                logging.debug(
-                    "Skipping candidate with question words: '%s'", building_candidate)
-                continue
+    logging.debug("Extracted potential building name: '%s'", extracted_name)
 
-            # Skip if it's too generic (only common words)
-            if all(word in QUESTION_WORDS for word in words):
-                continue
-
-            # Validate: reasonable building name length (1-4 words)
-            word_count = len(words)
-            if 1 <= word_count <= 4 and len(building_candidate) >= MIN_BUILDING_NAME_LENGTH:
-                return building_candidate
-
-    return None
+    # Validate against known buildings with fuzzy matching
+    return validate_building_name_fuzzy(extracted_name, known_buildings)
 
 
-def _find_in_known_buildings(
-    query_lower: str,
-    known_buildings: List[str]
-) -> Optional[str]:
-    """
-    Find building name in known buildings list.
-    Optimized with length filtering and early exit.
-    """
-    # Filter and search in one pass
-    for building in known_buildings:
-        if len(building) >= MIN_BUILDING_NAME_LENGTH and building.lower() in query_lower:
-            return building
-
-    return None
-
-
-@lru_cache(maxsize=1024)
-def normalise_building_name(building_name: str) -> str:
-    """
-    Normalise a building name by removing common suffixes.
-    Cached for repeated calls with same input.
-
-    E.g., "Senate House BMS Controls" -> "Senate House"
-
-    Args:
-        building_name: Original building name
-
-    Returns:
-        Normalised building name
-    """
-    if not building_name:
-        return building_name
-
-    normalised = building_name
-    for pattern in NORMALIZATION_PATTERNS:
-        normalised = pattern.sub('', normalised)
-
-    return normalised.strip()
-
-
-def find_closest_building_name(
+def validate_building_name_fuzzy(
     extracted_name: str,
     known_buildings: Optional[List[str]] = None
 ) -> Optional[str]:
     """
-    Find the closest matching building name using cached data and fuzzy matching.
+    Validate extracted name against known buildings using fuzzy matching.
+    IMPROVED: Checks all metadata field variations with 80% threshold.
 
     Args:
-        extracted_name: Building name extracted from query
-        known_buildings: Optional list of known building names (uses cache if None)
+        extracted_name: Extracted building name candidate
+        known_buildings: List of known building names
 
     Returns:
-        Best matching canonical building name or None
+        Canonical building name if matched, None otherwise
     """
     if not extracted_name:
         return None
 
-    # Use cache if no buildings provided
+    # Use cache if no explicit list provided
     if known_buildings is None:
         if _CACHE_POPULATED:
             known_buildings = get_building_names_from_cache()
@@ -367,45 +590,87 @@ def find_closest_building_name(
         return None
 
     # Cache the lowercase version for multiple comparisons
-    extracted_lower = extracted_name.lower()
+    extracted_lower = extracted_name.lower().strip()
+    extracted_norm = normalise_building_name(extracted_name)
 
-    # Strategy 1: Check aliases first (if cache populated)
+    # Strategy 1: Exact match in aliases cache
     if _CACHE_POPULATED:
         canonical = _BUILDING_ALIASES_CACHE.get(extracted_lower)
         if canonical:
-            logging.info("Alias match: '%s' -> '%s'",
+            logging.info("✅ Alias exact match: '%s' -> '%s'",
                          extracted_name, canonical)
             return canonical
 
-        # Check canonical names
+        # Check canonical names cache
         canonical = _BUILDING_NAMES_CACHE.get(extracted_lower)
         if canonical:
-            logging.info("Exact match: '%s'", canonical)
+            logging.info("✅ Canonical exact match: '%s'", canonical)
             return canonical
 
-    # Strategy 2: Exact match (case-insensitive)
+    # Strategy 2: Exact match (case-insensitive) in known buildings
     for building in known_buildings:
         if building.lower() == extracted_lower:
+            logging.info("✅ Exact match: '%s'", building)
             return building
 
     # Strategy 3: Substring match (extracted name in building name)
     for building in known_buildings:
         if extracted_lower in building.lower():
+            logging.info("✅ Substring match: '%s' in '%s'",
+                         extracted_name, building)
             return building
 
     # Strategy 4: Reverse substring match (building name in extracted name)
     for building in known_buildings:
         if building.lower() in extracted_lower:
+            logging.info("✅ Reverse substring match: '%s' contains '%s'",
+                         extracted_name, building)
             return building
 
-    # Strategy 5: Fuzzy match using difflib (80% similarity)
+    # Strategy 5: Fuzzy match against all metadata field variations
+    if _CACHE_POPULATED:
+        best_match = None
+        best_score = 0.0
+        best_canonical = None
+
+        for canonical in known_buildings:
+            match_result = fuzzy_match_against_metadata_fields(
+                extracted_name, canonical, FUZZY_MATCH_THRESHOLD
+            )
+
+            if match_result:
+                matched_field, score = match_result
+                if score > best_score:
+                    best_score = score
+                    best_match = matched_field
+                    best_canonical = canonical
+
+        if best_canonical:
+            logging.info(
+                "✅ Fuzzy match (%.1f%%): '%s' -> '%s' (via field '%s')",
+                best_score * 100,
+                extracted_name,
+                best_canonical,
+                best_match
+            )
+            return best_canonical
+
+    # Strategy 6: Standard fuzzy match using difflib (80% similarity)
     matches = get_close_matches(
-        extracted_name, known_buildings, n=1, cutoff=0.80
+        extracted_name, known_buildings, n=1, cutoff=FUZZY_MATCH_THRESHOLD
     )
     if matches:
+        logging.info("✅ Difflib fuzzy match (≥80%%): '%s' -> '%s'",
+                     extracted_name, matches[0])
         return matches[0]
 
+    logging.debug("❌ No match found for '%s'", extracted_name)
     return None
+
+
+# ============================================================================
+# RESULT PROCESSING FUNCTIONS
+# ============================================================================
 
 
 def group_results_by_building(
@@ -413,71 +678,53 @@ def group_results_by_building(
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Group search results by normalised building name.
-    This ensures "Senate House" and "Senate House BMS Controls" are grouped together.
-
-    Args:
-        results: List of search results with building_name field
-
-    Returns:
-        Dictionary mapping normalised building names to result lists
+    IMPROVED: Uses enhanced building name extraction from multiple fields.
     """
     grouped = {}
 
     for result in results:
-        building_name = result.get('building_name', 'Unknown')
+        # Extract building name from multiple metadata fields
+        metadata = result.get('metadata', {})
+        building_name = None
 
-        # Normalise the building name for grouping
+        # Check metadata fields in priority order
+        for field in ['canonical_building_name', 'building_name', 'Property names', 'UsrFRACondensedPropertyName']:
+            value = metadata.get(field) or result.get(field)
+            if value:
+                if isinstance(value, list):
+                    # Take first non-empty item from list
+                    for item in value:
+                        if item and str(item).strip():
+                            building_name = str(item).strip()
+                            break
+                elif isinstance(value, str) and value.strip():
+                    building_name = value.strip()
+
+                if building_name:
+                    break
+
+        # Fallback if no building name found
+        if not building_name or building_name == 'Unknown':
+            building_name = result.get('building_name', 'Unknown')
+
         normalised_name = normalise_building_name(building_name)
 
-        # If normalization made it empty, use original
         if not normalised_name:
             normalised_name = building_name
 
         if normalised_name not in grouped:
             grouped[normalised_name] = []
 
-        # Add normalized building name for reference (modify in place)
-        # No need for copy since we're just adding metadata
         if '_normalised_building' not in result:
             result['_normalised_building'] = normalised_name
+
+        # Also store the original building name for reference
+        if '_original_building' not in result:
+            result['_original_building'] = building_name
 
         grouped[normalised_name].append(result)
 
     return grouped
-
-
-def get_building_context_summary(
-    building_results: Dict[str, List[Dict[str, Any]]]
-) -> str:
-    """
-    Create a summary of buildings found in search results.
-
-    Args:
-        building_results: Results grouped by building name
-
-    Returns:
-        Formatted summary string
-    """
-    if not building_results:
-        return ""
-
-    summary_parts = []
-    for building, results in building_results.items():
-        # Count document types efficiently
-        doc_types = {}
-        for r in results:
-            doc_type = r.get('document_type', 'unknown')
-            doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
-
-        # Format document type counts
-        type_str = ', '.join(
-            f"{count} {dtype}" for dtype, count in sorted(doc_types.items())
-        )
-        summary_parts.append(
-            f"- {building}: {len(results)} results ({type_str})"
-        )
-
-    return "Buildings found:\n" + "\n".join(summary_parts)
 
 
 def prioritise_building_results(
@@ -486,31 +733,19 @@ def prioritise_building_results(
 ) -> List[Dict[str, Any]]:
     """
     Reorder results to prioritise a specific building.
-    Uses flexible matching to catch name variations.
-    Optimized with cached normalizations and single-pass sorting.
-
-    Args:
-        results: List of search results
-        target_building: Building name to prioritise
-
-    Returns:
-        Reordered list with target building results first
     """
     if not target_building or not results:
         return results
 
-    # Pre-compute target variations once
     target_normalised = normalise_building_name(target_building).lower()
     target_lower = target_building.lower()
 
-    # Single-pass separation with cached normalizations
     priority_results = []
     other_results = []
 
     for result in results:
         building_name = result.get('building_name', '')
 
-        # Use cached normalization if available
         if '_normalised_building' in result:
             normalised = result['_normalised_building'].lower()
         else:
@@ -518,7 +753,6 @@ def prioritise_building_results(
 
         building_lower = building_name.lower()
 
-        # Check if this result matches the target building
         is_match = (
             target_normalised in normalised or
             normalised in target_normalised or
@@ -538,44 +772,42 @@ def prioritise_building_results(
         len(other_results)
     )
 
-    # Return combined list with priority results first
     return priority_results + other_results
 
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-
-def get_building_variations(building_name: str) -> List[str]:
+def get_building_context_summary(
+    building_results: Dict[str, List[Dict[str, Any]]]
+) -> str:
     """
-    Generate common variations of a building name for matching.
-
-    Args:
-        building_name: Original building name
-
-    Returns:
-        List of name variations
+    Create a summary of buildings found in search results.
     """
-    variations = [building_name]
+    if not building_results:
+        return ""
 
-    # Add normalized version
-    normalized = normalise_building_name(building_name)
-    if normalized != building_name:
-        variations.append(normalized)
+    summary_parts = []
+    for building, results in building_results.items():
+        doc_types = {}
+        for r in results:
+            doc_type = r.get('document_type', 'unknown')
+            doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
 
-    # Add without common words
-    for word in ['Building', 'House', 'Hall', 'Complex']:
-        if word in building_name:
-            variation = building_name.replace(word, '').strip()
-            if variation and variation not in variations:
-                variations.append(variation)
+        type_str = ', '.join(
+            f"{count} {dtype}" for dtype, count in sorted(doc_types.items())
+        )
+        summary_parts.append(
+            f"- {building}: {len(results)} results ({type_str})"
+        )
 
-    return variations
+    return "Buildings found:\n" + "\n".join(summary_parts)
+
+
+# ============================================================================
+# CACHE UTILITIES
+# ============================================================================
 
 
 def clear_caches():
-    """Clear all LRU caches (useful for testing or memory management)."""
+    """Clear all LRU caches."""
     normalise_building_name.cache_clear()
     clear_building_cache()
     logging.info("Cleared building_utils caches")
@@ -586,4 +818,53 @@ def get_cache_info() -> Dict[str, Any]:
     return {
         'normalise_building_name': normalise_building_name.cache_info()._asdict(),
         'building_cache': get_cache_status()
+    }
+
+
+# ============================================================================
+# DEBUGGING/TESTING UTILITIES
+# ============================================================================
+
+
+def test_building_extraction(test_queries: List[str]) -> Dict[str, Optional[str]]:
+    """
+    Test building extraction on multiple queries.
+
+    Args:
+        test_queries: List of query strings to test
+
+    Returns:
+        Dictionary mapping queries to extracted buildings
+    """
+    results = {}
+    for query in test_queries:
+        building = extract_building_from_query(query)
+        results[query] = building
+        logging.info("Test: '%s' -> %s", query, building or "None")
+
+    return results
+
+
+def get_building_metadata_summary(canonical_name: str) -> Dict[str, Any]:
+    """
+    Get summary of all metadata field variations for a building.
+
+    Args:
+        canonical_name: Canonical building name
+
+    Returns:
+        Dictionary with metadata field information
+    """
+    if canonical_name not in _METADATA_FIELDS_CACHE:
+        return {
+            'canonical_name': canonical_name,
+            'found': False,
+            'metadata_fields': []
+        }
+
+    return {
+        'canonical_name': canonical_name,
+        'found': True,
+        'metadata_fields': sorted(list(_METADATA_FIELDS_CACHE[canonical_name])),
+        'field_count': len(_METADATA_FIELDS_CACHE[canonical_name])
     }

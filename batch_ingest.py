@@ -64,8 +64,12 @@ MAX_PENDING_VECTORS = int(os.getenv("MAX_PENDING_VECTORS", "10000"))
 EXT_WHITELIST = {"txt", "md", "csv", "json", "pdf", "docx"}
 
 # Global cache for building names
-BUILDING_NAME_CACHE = {}  # Maps normalized names to canonical names
+BUILDING_NAME_CACHE = {}  # Maps normalised names to canonical names
 BUILDING_ALIASES_CACHE = {}  # Maps aliases to canonical names
+
+# NEW: Global cache for building metadata from CSV
+# Maps canonical building name to full metadata dict including aliases
+BUILDING_METADATA_CACHE: Dict[str, Dict[str, Any]] = {}
 
 # Statistics tracking
 stats = {
@@ -211,36 +215,83 @@ def load_building_names_with_aliases(bucket: str, key: str) -> Tuple[List[str], 
             primary_name = str(primary_name).strip()
             canonical_names.append(primary_name)
 
-            # Map normalized primary name to canonical
-            normalized_primary = primary_name.lower().strip()
-            name_to_canonical[normalized_primary] = primary_name
+            # Map normalised primary name to canonical
+            normalised_primary = primary_name.lower().strip()
+            name_to_canonical[normalised_primary] = primary_name
+            # FIXED: Ensure canonical maps to itself
+            alias_to_canonical[normalised_primary] = primary_name
+            # Ensure canonical name maps to itself
+            alias_to_canonical[normalised_primary] = primary_name
 
-            # Process Property names (semicolon-separated)
+            # Process Property names (comma-separated)
             property_names = row.get("Property names")
             if pd.notna(property_names):
-                for name in str(property_names).split(";"):
+                for name in str(property_names).split(","):
                     name = name.strip()
                     if name:
-                        normalized = name.lower().strip()
-                        alias_to_canonical[normalized] = primary_name
-                        name_to_canonical[normalized] = primary_name
+                        normalised = name.lower().strip()
+                        alias_to_canonical[normalised] = primary_name
+                        name_to_canonical[normalised] = primary_name
 
-            # Process Property alternative names (semicolon-separated)
+            # Process Property alternative names (comma-separated)
             alt_names = row.get("Property alternative names")
             if pd.notna(alt_names):
-                for name in str(alt_names).split(";"):
+                for name in str(alt_names).split(","):
                     name = name.strip()
                     if name:
-                        normalized = name.lower().strip()
-                        alias_to_canonical[normalized] = primary_name
+                        normalised = name.lower().strip()
+                        alias_to_canonical[normalised] = primary_name
 
             # Process UsrFRACondensedPropertyName (common abbreviations)
             condensed = row.get("UsrFRACondensedPropertyName")
             if pd.notna(condensed):
                 condensed = str(condensed).strip()
                 if condensed:
-                    normalized = condensed.lower().strip()
-                    alias_to_canonical[normalized] = primary_name
+                    normalised = condensed.lower().strip()
+                    alias_to_canonical[normalised] = primary_name
+
+            # NEW: Collect all aliases for metadata cache
+            aliases = []
+
+            # Add Property names
+            if pd.notna(property_names):
+                aliases.extend([n.strip() for n in str(
+                    property_names).split(",") if n.strip()])
+
+            # Add alternative names
+            if pd.notna(alt_names):
+                aliases.extend([n.strip()
+                               for n in str(alt_names).split(",") if n.strip()])
+
+            # Add condensed name
+            if pd.notna(condensed):
+                aliases.append(condensed)
+
+            # Remove duplicates while preserving order
+            unique_aliases = []
+            seen = set()
+            for alias in aliases:
+                alias_lower = alias.lower()
+                if alias_lower not in seen:
+                    seen.add(alias_lower)
+                    unique_aliases.append(alias)
+
+            # NEW: Store complete metadata for this building
+            building_metadata = {
+                "canonical_building_name": primary_name,
+                "building_aliases": unique_aliases,
+            }
+
+            # Add other metadata fields
+            for field in ["Property code", "Property postcode", "Property campus",
+                          "UsrFRACondensedPropertyName", "Property names",
+                          "Property alternative names"]:
+                if pd.notna(row.get(field)):
+                    building_metadata[field] = str(row[field])
+
+            # Store in cache with both canonical and normalised keys
+            BUILDING_METADATA_CACHE[primary_name] = building_metadata
+            BUILDING_METADATA_CACHE[normalised_primary] = building_metadata
 
         # Update global caches
         BUILDING_NAME_CACHE = name_to_canonical
@@ -251,12 +302,56 @@ def load_building_names_with_aliases(bucket: str, key: str) -> Tuple[List[str], 
             len(canonical_names),
             len(alias_to_canonical)
         )
+        logging.info(
+            "✅ Populated BUILDING_METADATA_CACHE with metadata for %d buildings",
+            # Count only canonical names (non-lowercase keys)
+            len([k for k in BUILDING_METADATA_CACHE.keys() if not k.islower()])
+        )
 
         return canonical_names, name_to_canonical, alias_to_canonical
 
     except Exception as e:  # pylint: disable=broad-except
         logging.warning("Could not load building names with aliases: %s", e)
         return [], {}, {}
+
+
+def get_building_metadata(building_name: str) -> Dict[str, Any]:
+    """
+    Get full building metadata including aliases from cache.
+
+    This function looks up a building name (canonical or alias) and returns
+    the complete metadata including building_aliases that were loaded from CSV.
+
+    Args:
+        building_name: Canonical building name or any known alias
+
+    Returns:
+        Dictionary with building metadata including aliases, or empty dict if not found
+    """
+    if not building_name:
+        return {}
+
+    # Try exact match first (canonical name)
+    if building_name in BUILDING_METADATA_CACHE:
+        return BUILDING_METADATA_CACHE[building_name].copy()
+
+    # Try normalised lookup
+    normalised = building_name.lower().strip()
+    if normalised in BUILDING_METADATA_CACHE:
+        return BUILDING_METADATA_CACHE[normalised].copy()
+
+    # Try to resolve through alias cache to get canonical, then lookup metadata
+    canonical = BUILDING_ALIASES_CACHE.get(normalised)
+    if canonical and canonical in BUILDING_METADATA_CACHE:
+        return BUILDING_METADATA_CACHE[canonical].copy()
+
+    # Try normalised canonical from NAME_CACHE
+    canonical = BUILDING_NAME_CACHE.get(normalised)
+    if canonical and canonical in BUILDING_METADATA_CACHE:
+        return BUILDING_METADATA_CACHE[canonical].copy()
+
+    logging.debug("No metadata found in cache for building: %s", building_name)
+    return {}
 
 
 def find_closest_building_name(
@@ -305,7 +400,7 @@ def find_closest_building_name_enhanced(
 
     Args:
         extracted_name: Building name extracted from query/filename
-        name_to_canonical: Map of normalized names to canonical names
+        name_to_canonical: Map of normalised names to canonical names
         alias_to_canonical: Map of aliases to canonical names
         known_buildings: List of canonical building names (for fallback)
 
@@ -315,30 +410,30 @@ def find_closest_building_name_enhanced(
     if not extracted_name:
         return extracted_name
 
-    normalized = extracted_name.lower().strip()
+    normalised = extracted_name.lower().strip()
 
     # Strategy 1: Direct match in canonical names
-    if normalized in name_to_canonical:
-        canonical = name_to_canonical[normalized]
+    if normalised in name_to_canonical:
+        canonical = name_to_canonical[normalised]
         logging.info("Exact match: '%s' -> '%s'", extracted_name, canonical)
         return canonical
 
     # Strategy 2: Match in aliases
-    if normalized in alias_to_canonical:
-        canonical = alias_to_canonical[normalized]
+    if normalised in alias_to_canonical:
+        canonical = alias_to_canonical[normalised]
         logging.info("Alias match: '%s' -> '%s'", extracted_name, canonical)
         return canonical
 
     # Strategy 3: Substring match in canonical names
     for norm_name, canonical in name_to_canonical.items():
-        if normalized in norm_name or norm_name in normalized:
+        if normalised in norm_name or norm_name in normalised:
             logging.info("Substring match: '%s' -> '%s'",
                          extracted_name, canonical)
             return canonical
 
     # Strategy 4: Substring match in aliases
     for alias, canonical in alias_to_canonical.items():
-        if normalized in alias or alias in normalized:
+        if normalised in alias or alias in normalised:
             logging.info("Alias substring match: '%s' -> '%s'",
                          extracted_name, canonical)
             return canonical
@@ -424,7 +519,7 @@ def extract_building_name_from_filename(
     # Clean up multiple spaces and trim
     name = re.sub(r"\s+", " ", name).strip()
 
-    # Capitalize properly
+    # Capitalise properly
     name = " ".join(word.capitalize() for word in name.split())
 
     return name
@@ -967,6 +1062,39 @@ def process_document(
                 "text": chunk_str,
                 "document_type": doc_type,
             }
+
+            # NEW: Add building metadata (including aliases) from cache
+            # This ensures non-CSV documents have the same metadata fields as CSV documents
+            cached_building_metadata = get_building_metadata(building_name)
+            if cached_building_metadata:
+                # Add building_aliases if available
+                if "building_aliases" in cached_building_metadata:
+                    metadata["building_aliases"] = cached_building_metadata["building_aliases"]
+                    if i == 0 and j == 0:  # Log only once per file
+                        logging.info(
+                            "✅ Added %d building aliases from cache to %s: %s",
+                            len(cached_building_metadata["building_aliases"]),
+                            doc_type,
+                            ", ".join(cached_building_metadata["building_aliases"][:3]) +
+                            ("..." if len(
+                                cached_building_metadata["building_aliases"]) > 3 else "")
+                        )
+
+                # Add other metadata fields from CSV for consistency
+                for field in ["Property code", "Property postcode", "Property campus",
+                              "UsrFRACondensedPropertyName", "Property names",
+                              "Property alternative names"]:
+                    if field in cached_building_metadata:
+                        metadata[field] = cached_building_metadata[field]
+            else:
+                # If no match in cache, add empty building_aliases for consistency
+                metadata["building_aliases"] = []
+                if i == 0 and j == 0:  # Log only once per file
+                    logging.debug(
+                        "No cached metadata for building '%s' in %s, using empty aliases",
+                        building_name,
+                        doc_type
+                    )
 
             if validate_metadata(metadata):
                 vectors.append((cid, emb, metadata))

@@ -2,7 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Answer generation using OpenAI with enhanced source date information and building-aware context.
-Optimized version with building-aware date extraction and reduced duplication.
+OPTIMIZED VERSION: Works with improved search logic and multi-field building extraction.
+
+Key improvements:
+- Properly extracts building names from multiple metadata fields
+- Compatible with improved fuzzy matching system
+- Better handling of building-specific results
+- Enhanced metadata field checking
 """
 import logging
 import re
@@ -36,6 +42,14 @@ EMOJI_CHART = "📊"
 DATE_FIELDS_PRIORITY = ['review_date', 'updated',
                         'revised', 'date', 'document_date']
 
+# Building name metadata fields (in priority order)
+BUILDING_NAME_FIELDS = [
+    'canonical_building_name',
+    'building_name',
+    'Property names',
+    'UsrFRACondensedPropertyName'
+]
+
 # Planon date extraction patterns (compiled once)
 PLANON_DATE_PATTERNS = [
     re.compile(
@@ -55,10 +69,45 @@ PLANON_DATE_PATTERNS = [
 def get_metadata_field(result: Dict[str, Any], field: str, default: Any = None) -> Any:
     """
     Get field from metadata first, then fall back to top level.
-    Centralized accessor to avoid repeated pattern.
+    Centralised accessor to avoid repeated pattern.
     """
     metadata = result.get('metadata', {})
     return metadata.get(field) or result.get(field, default)
+
+
+def get_building_name_from_result(result: Dict[str, Any]) -> str:
+    """
+    Extract building name from result, checking multiple metadata fields.
+    IMPROVED: Checks all building-related fields in priority order.
+
+    Args:
+        result: Search result dictionary
+
+    Returns:
+        Building name or 'Unknown' if not found
+    """
+    metadata = result.get('metadata', {})
+
+    # Check each field in priority order
+    for field in BUILDING_NAME_FIELDS:
+        value = metadata.get(field) or result.get(field)
+
+        if value:
+            # Handle list values (take first non-empty)
+            if isinstance(value, list):
+                for item in value:
+                    if item and str(item).strip():
+                        return str(item).strip()
+            # Handle string values
+            elif isinstance(value, str) and value.strip():
+                return value.strip()
+
+    # Fallback: check top-level building_name (backward compatibility)
+    building_name = result.get('building_name', '')
+    if building_name and building_name != 'Unknown':
+        return building_name
+
+    return 'Unknown'
 
 
 def get_text_from_result(result: Dict[str, Any]) -> str:
@@ -121,11 +170,12 @@ def find_operational_date(
     target_building: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """
-    Find date from operational docs, prioritizing target building.
+    Find date from operational docs, prioritising target building.
+    IMPROVED: Uses enhanced building matching.
 
     Args:
         operational_results: List of operational/FRA documents
-        target_building: Optional building to prioritize
+        target_building: Optional building to prioritise
 
     Returns:
         (date, doc_key) tuple
@@ -136,19 +186,28 @@ def find_operational_date(
     # Filter by building if specified
     if target_building:
         # Import here to avoid circular dependency
-        from search_operations import matches_building
+        try:
+            from search_operations import matches_building_fuzzy
+        except ImportError:
+            # Fallback to original if improved version not available
+            from search_operations import matches_building
+            # Wrapper function with correct signature
+
+            def matches_building_fuzzy(result: Dict[str, Any], target_building: str) -> bool:
+                return matches_building(get_building_name_from_result(result), target_building)
 
         building_specific = [
             r for r in operational_results
-            if matches_building(r.get('building_name', ''), target_building)
+            if matches_building_fuzzy(r, target_building)
         ]
 
         if building_specific:
             top_operational = building_specific[0]
+            building_name = get_building_name_from_result(top_operational)
             logging.info(
                 "✅ Using building-specific operational doc: %s (building: %s)",
                 top_operational.get('key', ''),
-                top_operational.get('building_name', '')
+                building_name
             )
         else:
             logging.warning(
@@ -160,12 +219,13 @@ def find_operational_date(
         top_operational = operational_results[0]
 
     key_value = top_operational.get("key", "")
+    building_name = get_building_name_from_result(top_operational)
 
     logging.debug(
         "Processing operational doc: %s (score: %.3f, building: %s)",
         key_value,
         top_operational.get('score', 0),
-        top_operational.get('building_name', 'Unknown')
+        building_name
     )
 
     # Strategy 1: Comprehensive search across all chunks
@@ -213,30 +273,25 @@ def _search_comprehensive_date(result: Dict[str, Any], key_value: str) -> Option
                 "Found date via comprehensive search: %s", latest_date)
             return latest_date
 
-    except (KeyError, ValueError, RuntimeError) as e:
-        logging.debug("Comprehensive search failed: %s", e)
+    except Exception as e:  # pylint: disable=broad-except
+        logging.warning(
+            "Comprehensive date search failed for %s: %s", key_value, e)
 
     return None
 
 
 def _search_metadata_date(result: Dict[str, Any]) -> Optional[str]:
-    """Search for date in metadata fields."""
+    """Search metadata fields for date information."""
     metadata = result.get('metadata', {})
 
-    for date_field in DATE_FIELDS_PRIORITY:
-        field_value = metadata.get(date_field)
-
-        if field_value and field_value != "publication date unknown":
-            logging.info(
-                "Found date in metadata[%s]: %s", date_field, field_value)
-            return field_value
+    for field in DATE_FIELDS_PRIORITY:
+        date_value = metadata.get(field)
+        if date_value:
+            logging.info("Found date in metadata field '%s': %s",
+                         field, date_value)
+            return date_value
 
     return None
-
-
-# ============================================================================
-# MAIN DATE EXTRACTION
-# ============================================================================
 
 
 def get_document_dates_by_type(
@@ -244,236 +299,181 @@ def get_document_dates_by_type(
     target_building: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Get dates by document type with building awareness.
-    Always prioritizes the highest-scoring operational doc for the target building.
+    Extract dates from mixed Planon and operational documents.
+    IMPROVED: Better building awareness.
 
     Args:
-        results: Search results
-        target_building: Optional building to prioritize for dates
+        results: Mixed list of search results
+        target_building: Optional building to filter by
 
     Returns:
-        (planon_date, operational_date, operational_doc_key)
+        (planon_date, operational_date, operational_doc_key) tuple
     """
     planon_results, operational_results = separate_results_by_type(results)
 
-    # Get Planon date (optionally filter by building)
-    if target_building:
-        # Import here to avoid circular dependency
-        from search_operations import matches_building
+    # Get Planon date
+    planon_date = find_planon_date(planon_results) if planon_results else None
 
-        building_planon = [
-            r for r in planon_results
-            if matches_building(r.get('building_name', ''), target_building)
-        ]
-
-        if building_planon:
-            planon_date = find_planon_date(building_planon)
-            if planon_date:
-                logging.info(
-                    "Found building-specific Planon date: %s", planon_date)
-        else:
-            planon_date = find_planon_date(planon_results)
-    else:
-        planon_date = find_planon_date(planon_results)
-
-    # Get operational date with building context
+    # Get operational date (building-aware)
     operational_date, operational_doc_key = find_operational_date(
-        operational_results,
-        target_building  # Pass building context
+        operational_results, target_building
     )
 
-    # Summary logging
+    # Log date findings
+    building_name = target_building or "all buildings"
+    planon_str = planon_date if planon_date else "NONE"
+    operational_str = f"{operational_date} (from {operational_doc_key})" if operational_date else "NONE"
+
     logging.info(
-        "Dates found%s - Planon: %s, Operational: %s (from %s)",
-        f" for {target_building}" if target_building else "",
-        planon_date or "NONE",
-        operational_date or "NONE",
-        operational_doc_key or "NONE"
+        "Dates found for %s - Planon: %s, Operational: %s",
+        building_name,
+        planon_str,
+        operational_str
     )
 
     return planon_date, operational_date, operational_doc_key
 
 
-# ============================================================================
-# DATE FORMATTING
-# ============================================================================
-
-
 def format_date_information(
     planon_date: Optional[str],
     operational_date: Optional[str],
-    operational_doc_key: Optional[str] = None
+    operational_doc_key: Optional[str]
 ) -> Tuple[str, str]:
     """
-    Format date information for display and context.
-    Emphasizes operational doc date as the primary "last updated" date.
+    Format date information for LLM context and user display.
+
+    Args:
+        planon_date: Planon property condition assessment date
+        operational_date: Operational/technical document date
+        operational_doc_key: Key of operational document
 
     Returns:
-        (date_context_for_llm, publication_info_for_display)
+        (context_str, display_str) tuple
     """
     context_parts = []
     display_parts = []
 
-    # Format operational document date FIRST (primary date)
     if operational_date:
         parsed = parse_date_string(operational_date)
         display_date = format_display_date(parsed)
 
-        doc_display = _format_doc_name(
-            operational_doc_key) if operational_doc_key else None
-
-        if doc_display:
-            context_parts.append(
-                f"Technical documentation ('{operational_doc_key}'): Last updated {display_date}. "
-                f"This is the primary date for technical/BMS/FRA information."
-            )
-            display_parts.append(
-                f"{EMOJI_DOCUMENT} **Document last updated**: {display_date} ({doc_display})"
-            )
-        else:
-            context_parts.append(
-                f"Technical documentation: Last updated {display_date}. "
-                f"This is the primary date for technical/BMS/FRA information."
-            )
-            display_parts.append(
-                f"{EMOJI_DOCUMENT} **Document last updated**: {display_date}"
-            )
-    elif operational_doc_key:
-        doc_display = _format_doc_name(operational_doc_key)
         context_parts.append(
-            f"Technical documentation ('{operational_doc_key}'): Date not available"
+            f"Technical documentation last updated: {display_date} "
+            f"(source: {operational_doc_key or 'operational document'})"
         )
         display_parts.append(
-            f"{EMOJI_DOCUMENT} **Document** ({doc_display}): date unknown"
+            f"{EMOJI_DOCUMENT} Technical documentation last updated: **{display_date}**"
         )
 
-    # Format Planon date SECOND (supplementary)
     if planon_date:
         parsed = parse_date_string(planon_date)
         display_date = format_display_date(parsed)
+
         context_parts.append(
-            f"Property condition assessment: {display_date}. "
-            f"This date is only relevant for building condition, not BMS/technical systems."
+            f"Property condition assessment date: {display_date}"
         )
         display_parts.append(
-            f"{EMOJI_BUILDING} **Property condition assessment**: {display_date}"
+            f"{EMOJI_BUILDING} Property assessment: **{display_date}**"
         )
 
-    # Build final strings
-    if context_parts:
-        date_context = "Document Date Information:\n" + \
-            "\n".join(f"- {p}" for p in context_parts)
+    if not context_parts:
+        context_str = "Date information: Not available"
+        display_str = ""
     else:
-        date_context = "Document Date Information: Not available"
+        context_str = "\n".join(context_parts)
+        display_str = " | ".join(display_parts)
 
-    publication_info = "\n".join(
-        display_parts) if display_parts else f"{EMOJI_CALENDAR} **Date information unavailable**"
-
-    return date_context, publication_info
+    return context_str, display_str
 
 
-def _format_doc_name(doc_key: str) -> str:
-    """Clean up document key for display."""
-    return doc_key.replace('UoB-', '').replace('.pdf', '').replace('.docx', '').replace('-', ' ')
-
-
-# ============================================================================
-# CONTEXT BUILDING
-# ============================================================================
-
-
-def build_context(
-    snippets: List[str],
-    max_chars: int = 6000,
-    prioritize_building: bool = False
-) -> str:
-    """
-    Build context string from text snippets with optional building prioritization.
-    """
-    if prioritize_building:
-        # Separate property data from operational docs
-        property_snippets = [
-            s for s in snippets if s and 'Building:' in s[:100]]
-        operational_snippets = [
-            s for s in snippets if s and 'Building:' not in s[:100]]
-
-        # Combine with property data first
-        snippets = property_snippets + operational_snippets
-
-    blob = "\n\n---\n\n".join(s.strip() for s in snippets if s and s.strip())
-    return blob if len(blob) <= max_chars else blob[:max_chars]
-
-
-def build_building_grouped_context(
-    results: List[Dict[str, Any]],
-    max_chars: int = 6000
-) -> str:
-    """Build context grouped by building and document type."""
-    building_groups = {}
-
-    # Group by building
-    for result in results:
-        building = get_metadata_field(
-            result, 'building_name', 'Unknown Building')
-        doc_type = get_metadata_field(result, 'document_type', 'unknown')
-
-        if building not in building_groups:
-            building_groups[building] = {'planon': [], 'operational': []}
-
-        if doc_type == DOC_TYPE_PLANON:
-            building_groups[building]['planon'].append(result)
-        else:
-            building_groups[building]['operational'].append(result)
-
-    # Build context with building sections
+def build_context_from_results(results: List[Dict[str, Any]], max_chars: int = 8000) -> str:
+    """Build context string from search results with metadata."""
     context_parts = []
-    char_count = 0
+    total_chars = 0
 
-    for building, docs in building_groups.items():
-        section = f"=== {building} ===\n\n"
+    for i, r in enumerate(results, 1):
+        text = get_text_from_result(r)
+        doc_type = get_metadata_field(r, 'document_type', 'unknown')
+        building = get_building_name_from_result(r)
+        score = r.get('score', 0)
 
-        # Add Planon data
-        if docs['planon']:
-            section += "--- Property/Planon Data ---\n"
-            for result in docs['planon'][:2]:
-                text = get_text_from_result(result)
-                section += f"{text[:500]}\n\n"
+        # Add metadata header
+        header = f"[Result {i} - Type: {doc_type}, Building: {building}, Score: {score:.3f}]"
+        snippet = f"{header}\n{text[:1500]}"
 
-        # Add operational docs
-        if docs['operational']:
-            section += "--- Technical/Operational Documentation ---\n"
-            for result in docs['operational'][:3]:
-                text = get_text_from_result(result)
-                key = get_metadata_field(result, 'key', '')
-                section += f"[{key}]:\n{text[:400]}\n\n"
-
-        if char_count + len(section) > max_chars:
+        if total_chars + len(snippet) > max_chars:
             break
 
-        context_parts.append(section)
-        char_count += len(section)
+        context_parts.append(snippet)
+        total_chars += len(snippet)
 
-        if char_count >= max_chars:
-            break
+    return "\n\n".join(context_parts)
 
-    return "\n".join(context_parts)
+
+def build_building_grouped_context(results: List[Dict[str, Any]], max_chars: int = 6000) -> str:
+    """
+    Build context grouped by document type for building-specific queries.
+    IMPROVED: Uses enhanced building name extraction.
+    """
+    planon_results, operational_results = separate_results_by_type(results)
+
+    context_parts = []
+    total_chars = 0
+
+    # Add operational/FRA docs first (higher priority for technical questions)
+    if operational_results:
+        context_parts.append("=== TECHNICAL DOCUMENTATION ===")
+        for i, r in enumerate(operational_results, 1):
+            text = get_text_from_result(r)
+            doc_type = get_metadata_field(r, 'document_type', 'unknown')
+            building = get_building_name_from_result(r)
+            key = r.get('key', 'unknown')
+
+            snippet = f"[Document {i}: {doc_type}, Building: {building}, Key: {key}]\n{text[:1200]}"
+
+            if total_chars + len(snippet) > max_chars:
+                break
+
+            context_parts.append(snippet)
+            total_chars += len(snippet)
+
+    # Add Planon data if space remains
+    if planon_results and total_chars < max_chars:
+        context_parts.append("\n=== PROPERTY/PLANON DATA ===")
+        for i, r in enumerate(planon_results, 1):
+            text = get_text_from_result(r)
+            building = get_building_name_from_result(r)
+
+            snippet = f"[Record {i}: Building: {building}]\n{text[:800]}"
+
+            if total_chars + len(snippet) > max_chars:
+                break
+
+            context_parts.append(snippet)
+            total_chars += len(snippet)
+
+    return "\n\n".join(context_parts)
 
 
 def build_term_explanation(term_context: Optional[Dict]) -> str:
-    """Build term explanation section for prompt."""
+    """Build explanation of business terms for LLM context."""
     if not term_context:
         return ""
 
-    explanations = [
-        f"- {term.upper()}: {info['full_name']} - {info['description']}"
-        for term, info in term_context.items()
-    ]
+    explanations = []
+    for term_key, term_info in term_context.items():
+        full_name = term_info.get('full_name', term_key.upper())
+        description = term_info.get('description', '')
+        explanations.append(
+            f"- **{term_key.upper()}** ({full_name}): {description}")
 
-    return "\nRELEVANT TERMINOLOGY:\n" + "\n".join(explanations) + "\n"
+    if explanations:
+        return "BUSINESS TERMS CONTEXT:\n" + "\n".join(explanations) + "\n"
+    return ""
 
 
 # ============================================================================
-# ANSWER GENERATION
+# ANSWER GENERATION FUNCTIONS
 # ============================================================================
 
 
@@ -485,59 +485,71 @@ def enhanced_answer_with_source_date(
     target_building: Optional[str] = None
 ) -> Tuple[str, str]:
     """
-    Generate an answer with building-aware date extraction.
+    Generate answer with enhanced date awareness and building context.
+    IMPROVED: Better building name extraction from results.
 
     Args:
         question: User query
         top_result: Top search result
         all_results: All search results
         term_context: Business term context
-        target_building: Optional building for context
+        target_building: Optional target building
 
     Returns:
         (answer, publication_info) tuple
     """
-    building_name = get_metadata_field(top_result, "building_name", "Unknown")
+    # Separate results by type
+    planon_results, operational_results = separate_results_by_type(all_results)
 
-    # Use target_building if provided, otherwise use detected
-    building_for_date = target_building or building_name
-
-    # Get dates by document type WITH building context
+    # Get dates
     planon_date, operational_date, operational_doc_key = get_document_dates_by_type(
         all_results,
-        target_building=building_for_date  # Pass building context
+        target_building=target_building
     )
 
-    # Format date information
     date_context, publication_info = format_date_information(
         planon_date, operational_date, operational_doc_key
     )
 
     # Build context
-    snippets = [get_text_from_result(r)
-                for r in all_results if get_text_from_result(r)]
-    context = build_context(snippets, prioritize_building=True)
+    context = build_context_from_results(all_results, max_chars=8000)
 
-    # Build prompt
+    # Get building name for context
+    building_name = get_building_name_from_result(top_result)
+    if target_building and building_name == 'Unknown':
+        building_name = target_building
+
+    # Document summary
+    doc_summary = []
+    if planon_results:
+        doc_summary.append(
+            f"{len(planon_results)} property/Planon record(s)")
+    if operational_results:
+        doc_summary.append(
+            f"{len(operational_results)} technical document(s)")
+
+    doc_summary_str = " and ".join(
+        doc_summary) if doc_summary else "documents"
+
+    # Build term explanation
     term_explanation = build_term_explanation(term_context)
 
     prompt = f"""Your name is Alfred, a helpful assistant at the University of Bristol working in the Smart Technology team.
 
-Answer the user's question using ONLY the context below. If the answer cannot be found in the context, tell the user that you don't know.
+Answer the user's question using ONLY the context below. The context includes {doc_summary_str}.
 
 {term_explanation}
 
 IMPORTANT DATE INFORMATION:
-- Technical documentation (BMS/operational docs and Fire Risk Assessments) has a "last updated" date - this is when the documentation was last revised
-- Property/Planon data includes a property condition assessment date - this is when the building condition was assessed
-- For technical questions (BMS, fire safety, systems), ALWAYS reference the technical document's last updated date
-- The property condition assessment date is only relevant when discussing building condition or facilities
+- Technical documentation has a "last updated" date - use this for technical/BMS/FRA questions
+- Property condition assessment date is only for building condition information
+- Always prioritise and mention the technical document's last updated date for technical questions
 
 DOCUMENT TYPES:
-- Property/Planon data provides: building characteristics, location, size, facilities manager, condition ratings
+- Property/Planon data provides: building characteristics, conditions, facilities information
 - Technical documentation provides: BMS system details, control sequences, equipment specifications, fire safety assessments, operating procedures
-- When answering about technical systems, prioritize the technical documentation
-- When answering about building properties/characteristics, prioritize the property data
+- When answering about technical systems, prioritise the technical documentation
+- When answering about building properties/characteristics, prioritise the property data
 
 Question: {question}
 
@@ -581,6 +593,7 @@ def generate_building_focused_answer(
 ) -> Tuple[str, str]:
     """
     Generate an answer specifically focused on a particular building.
+    IMPROVED: Better handling of building names from metadata.
 
     Args:
         question: User query
@@ -596,6 +609,10 @@ def generate_building_focused_answer(
     target_results = building_groups.get(target_building, [])
 
     if not target_results:
+        logging.warning(
+            "No results in building groups for '%s', using standard answer",
+            target_building
+        )
         return enhanced_answer_with_source_date(
             question, top_result, all_results, term_context, target_building
         )
@@ -621,7 +638,8 @@ def generate_building_focused_answer(
     if planon_results:
         doc_summary.append(f"{len(planon_results)} property/Planon record(s)")
     if operational_results:
-        doc_summary.append(f"{len(operational_results)} technical document(s)")
+        doc_summary.append(
+            f"{len(operational_results)} technical document(s)")
 
     doc_summary_str = " and ".join(doc_summary) if doc_summary else "documents"
 
@@ -637,7 +655,7 @@ Answer the user's question about **{target_building}** using ONLY the context be
 IMPORTANT DATE INFORMATION:
 - Technical documentation has a "last updated" date - use this for technical/BMS/FRA questions
 - Property condition assessment date is only for building condition information
-- Always prioritize and mention the technical document's last updated date for technical questions
+- Always prioritise and mention the technical document's last updated date for technical questions
 
 DOCUMENT TYPES:
 - Property/Planon data provides building characteristics, conditions, and facilities information
@@ -660,7 +678,7 @@ Context: {context}
             messages=[
                 {
                     "role": "system",
-                    "content": f"You are Alfred, a helpful assistant. You are answering specifically about {target_building}. When answering technical questions (BMS, fire safety, systems), ALWAYS use the technical document's 'last updated' date. The property condition assessment date is ONLY for building condition information. Always distinguish between property/Planon data (building information, conditions, facilities) and technical documentation (BMS systems, controls, fire safety). Include appropriate date information based on the question type, prioritizing technical doc dates for technical questions."
+                    "content": f"You are Alfred, a helpful assistant. You are answering specifically about {target_building}. When answering technical questions (BMS, fire safety, systems), ALWAYS use the technical document's 'last updated' date. The property condition assessment date is ONLY for building condition information. Always distinguish between property/Planon data (building information, conditions, facilities) and technical documentation (BMS systems, controls, fire safety). Include appropriate date information based on the question type, prioritising technical doc dates for technical questions."
                 },
                 {"role": "user", "content": prompt}
             ],
@@ -691,7 +709,10 @@ def compare_buildings_answer(
     question: str,
     building_groups: Dict[str, List[Dict[str, Any]]]
 ) -> Tuple[str, str]:
-    """Generate an answer that compares information across multiple buildings."""
+    """
+    Generate an answer that compares information across multiple buildings.
+    IMPROVED: Uses enhanced building name extraction.
+    """
     context_parts = []
 
     # Top 5 buildings
@@ -710,7 +731,7 @@ def compare_buildings_answer(
 Answer the user's question by comparing information across multiple buildings. The context includes information from: {buildings_list}
 
 IMPORTANT: 
-- Organize your answer by building
+- Organise your answer by building
 - Highlight similarities and differences
 - Be clear about which information applies to which building
 - Distinguish between property data and technical documentation where relevant
@@ -727,7 +748,7 @@ Context: {context}
             messages=[
                 {
                     "role": "system",
-                    "content": "You are Alfred, a helpful assistant. You are comparing information across multiple buildings. Organize by building and be clear about differences. Distinguish between technical document dates and property assessment dates."
+                    "content": "You are Alfred, a helpful assistant. You are comparing information across multiple buildings. Organise by building and be clear about differences. Distinguish between technical document dates and property assessment dates."
                 },
                 {"role": "user", "content": prompt}
             ],

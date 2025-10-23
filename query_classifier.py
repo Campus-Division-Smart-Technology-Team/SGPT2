@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Query classification to determine if queries need search or direct response.
-Optimized version with pre-compiled patterns and type hints.
+Optimised version with pre-compiled patterns and type hints.
 """
 
 import re
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from building_utils import extract_building_from_query
 from business_terms import BusinessTermMapper
 
-# # Import BusinessTermMapper - ensure this imports the optimized version
+# # Import BusinessTermMapper - ensure this imports the optimised version
 # try:
 #     from business_terms import BusinessTermMapper
 # except ImportError:
@@ -100,15 +100,14 @@ ACTION_PATTERNS = {
 
 GREETING_RESPONSES = [
     f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• {EMOJI_APPLE} Apples (the fruit) and Apple Inc.\n• {EMOJI_BUILDING} Building Management Systems (BMS)\n• {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
-    "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about apples, BMS and FRAs. How can I assist you?",
-    f"Hello! Alfred here {EMOJI_GORILLA}, your University of Bristol assistant. I have access to information about apples, building management systems and Fire Risk Assessments. What can I help you with?"
+    "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about BMS and FRAs. How can I assist you?",
+    f"Hello! Alfred here {EMOJI_GORILLA}, your University of Bristol assistant. I have access to information about building management systems and Fire Risk Assessments. What can I help you with?"
 ]
 
-ABOUT_RESPONSE = f"""I'm Alfred {EMOJI_GORILLA}, a specialized assistant for the University of Bristol's Smart Technology team.
+ABOUT_RESPONSE = f"""I'm Alfred {EMOJI_GORILLA}, a specialised assistant for the University of Bristol's Smart Technology team.
 
 **What I can do:**
 - Search and retrieve information from our knowledge bases
-- Answer questions about apples (both the fruit and Apple Inc.)
 - Provide information about Building Management Systems (BMS) and Fire Risk Assessments (FRAs) at the university
 - Tell you when documents were last updated or published
 
@@ -129,7 +128,7 @@ GRATITUDE_RESPONSES = [
 ]
 
 FAREWELL_RESPONSES = [
-    "Goodbye! Feel free to come back anytime you need information about apples or BMS systems.",
+    "Goodbye! Feel free to come back anytime you need information about BMS or FRAs across the different UoB buildings.",
     "Take care! I'll be here whenever you need to search our knowledge bases.",
     "See you later! Don't hesitate to return if you have more questions.",
     f"Farewell! Have a great day at the University of Bristol! {EMOJI_GORILLA}"
@@ -289,7 +288,7 @@ def parse_user_intent(query: str) -> QueryIntent:
 
 def get_query_complexity(query: str) -> str:
     """
-    Estimate query complexity for routing/optimization decisions.
+    Estimate query complexity for routing/optimisation decisions.
 
     Args:
         query: User query string

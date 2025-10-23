@@ -34,7 +34,34 @@ SEARCH_ALL_NAMESPACES = True
 DEFAULT_EMBED_MODEL = os.getenv(
     "DEFAULT_EMBED_MODEL", "text-embedding-3-small")
 ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
-DIMENSION = 1536  # for text-embedding-3-small
-
+# Index-specific configurations
+INDEX_CONFIGS = {
+    "apples": {
+        "model": "llama-text-embed-v2",
+        "dimension": 1024
+    },
+    "operational-docs": {
+        "model": "text-embedding-3-small",
+        "dimension": 1536
+    }
+}
+# Default dimension (for text-embedding-3-small)
+DIMENSION = 1536
 # Minimum score threshold for responses
 MIN_SCORE_THRESHOLD = 0.3
+
+
+def get_index_config(index_name: str) -> dict:
+    """
+    Get the configuration for a specific index.
+
+    Args:
+        index_name: Name of the index
+
+    Returns:
+        Dictionary with 'model' and 'dimension' keys
+    """
+    return INDEX_CONFIGS.get(index_name, {
+        "model": DEFAULT_EMBED_MODEL,
+        "dimension": DIMENSION
+    })

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Business terminology mapping and query enhancement for domain-specific terms.
-Optimized version with pre-compiled patterns and better type safety.
+Optimised version with pre-compiled patterns and better type safety.
 """
 
 import os
@@ -49,8 +49,8 @@ TERM_DEFINITIONS = {
         document_type='fire_risk_assessment',
         search_terms=['fire risk assessment',
                       'fire safety', 'FRA', 'fire assessment'],
-        variations=['fras', 'f.r.a.', 'fire-risk-assessment'],
-        description='Fire safety evaluation documents'
+        description='Fire safety evaluation documents',
+        variations=['fras', 'f.r.a.', 'fra', 'fire-risk-assessment']
     ),
     'ahu': TermInfo(
         term_key='ahu',
@@ -81,8 +81,8 @@ TERM_DEFINITIONS = {
         full_name='Planon Property Management',
         document_type='planon_data',
         search_terms=['planon', 'property management', 'property condition'],
-        variations=['property data', 'building data'],
-        description='Property management and condition assessment data'
+        description='Property management and condition assessment data',
+        variations=['property data', 'building data']
     ),
     'iq4': TermInfo(
         term_key='iq4',
@@ -248,7 +248,7 @@ class BusinessTermMapper:
     @classmethod
     def get_all_terms(cls) -> List[str]:
         """
-        Get list of all recognized term keys.
+        Get list of all recognised term keys.
 
         Returns:
             List of term keys
