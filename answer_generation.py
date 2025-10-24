@@ -282,7 +282,7 @@ def format_date_information(
             f"Technical Documentation Date: {operational_date} (from document: {operational_doc_key})"
         )
         publication_parts.append(
-            f"{EMOJI_DOCUMENT} Technical documentation last updated: **{display_op}**"
+            f"{EMOJI_DOCUMENT} **{operational_doc_key}** was last updated on **{display_op}**"
         )
 
     if planon_date:

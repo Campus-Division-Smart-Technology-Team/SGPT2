@@ -39,7 +39,8 @@ DATE_FORMATS = [
     "%d/%m/%Y",      # 28/07/2025
     "%m/%d/%Y",      # 07/28/2025
     "%Y",            # 2025
-    "%B %Y",         # July 2025
+    "%B %Y",         # July 2025 (IMPORTANT: handles August 2024, etc.)
+    "%b %Y",         # Aug 2025 (abbreviated month with year)
     "%d-%m-%Y",      # 28-07-2025
     "%Y/%m/%d",      # 2025/07/28
     "%d %b %Y",      # 19 Mar 2020 (abbreviated month)
@@ -69,6 +70,8 @@ DATE_DOT_YMD = r'[0-9]{{4}}\.[0-1]?[0-9]\.[0-3]?[0-9]'
 DATE_ISO = r'[0-9]{{4}}[/-][0-1]?[0-9][/-][0-3]?[0-9]'
 YEAR_ONLY = r'[0-9]{{4}}'
 DATE_TEXT_ORDINAL = r'[0-3]?[0-9](?:st|nd|rd|th)?[\s][A-Z][a-z]+[\s][0-9]{4}'
+# IMPROVED: More flexible pattern for "August 2024", "Aug 2024", etc.
+DATE_MONTH_YEAR_FLEX = r'(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}'
 
 # Pre-compiled date patterns with priorities
 DATE_PATTERNS = [
@@ -77,10 +80,14 @@ DATE_PATTERNS = [
      'Date\s+Revised'], DATE_TEXT_ORDINAL), re.IGNORECASE), 'labeled_updated', 15),
     (re.compile(_build_label_pattern(['Last\s+Updated', 'Last\s+Revised', 'Date\s+Updated',
      'Date\s+Revised'], DATE_NUMERIC), re.IGNORECASE), 'labeled_updated_numeric', 15),
+    (re.compile(_build_label_pattern(['Last\s+Updated', 'Last\s+Revised', 'Date\s+Updated',
+     'Date\s+Revised'], DATE_MONTH_YEAR_FLEX), re.IGNORECASE), 'labeled_updated_month_year', 15),
 
     # Document header patterns
     (re.compile(_build_label_pattern(['Document\s+Date', 'Issue\s+Date',
-     'Effective\s+Date'], DATE_TEXT_ORDINAL), re.IGNORECASE), 'doc_header', 14),
+                                      'Date\s+of\s+fire\s+risk\s+assessment', 'Effective\s+Date'], DATE_TEXT_ORDINAL), re.IGNORECASE), 'doc_header', 14),
+    (re.compile(_build_label_pattern(['Document\s+Date', 'Issue\s+Date',
+                                      'Date\s+of\s+fire\s+risk\s+assessment', 'Effective\s+Date'], DATE_MONTH_YEAR_FLEX), re.IGNORECASE), 'doc_header_month_year', 14),
     (re.compile(
         r'(?:Version|Rev\.?\s+|Revision)[:\s]*([0-9]{1,2}[\s/.-][A-Z][a-z]{2}[\s/.-][0-9]{4})', re.IGNORECASE), 'version_date', 13),
 
@@ -89,11 +96,16 @@ DATE_PATTERNS = [
      'Published'], DATE_TEXT_ORDINAL), re.IGNORECASE), 'labeled_general', 12),
     (re.compile(_build_label_pattern(
         ['Updated', 'Revised'], DATE_NUMERIC), re.IGNORECASE), 'labeled_general_numeric', 12),
+    (re.compile(_build_label_pattern(['Updated', 'Revised', 'Review\s+Date', 'Publication\s+Date',
+     'Published'], DATE_MONTH_YEAR_FLEX), re.IGNORECASE), 'labeled_general_month_year', 12),
 
     # Standard text dates (with ordinals)
     (re.compile(rf'\b({DATE_TEXT_ORDINAL})\b',
      re.IGNORECASE), 'standard_text_ordinal', 10),
     (re.compile(rf'\b({DATE_TEXT})\b', re.IGNORECASE), 'standard_text', 10),
+    # ADDED: Standalone month-year pattern with priority 9 (between standard text and dot formats)
+    (re.compile(rf'\b({DATE_MONTH_YEAR_FLEX})\b',
+     re.IGNORECASE), 'month_year_flex', 9),
     (re.compile(rf'\b({DATE_DOT_DMY})\b', re.IGNORECASE), 'dot_dmy', 8),
     (re.compile(rf'\b({DATE_DOT_YMD})\b', re.IGNORECASE), 'dot_ymd', 8),
     (re.compile(rf'\b({DATE_TEXT_FLEX})\b',
@@ -119,8 +131,12 @@ QUICK_DATE_PATTERNS = [
         r'(?:Last\s+Updated|Last\s+Revised|Updated|Revised|Published)[:\s]+([0-3]?[0-9](?:st|nd|rd|th)?[\s/.-][A-Za-z]+[\s/.-][0-9]{4})', re.IGNORECASE),
     re.compile(
         r'(?:Last\s+Updated|Last\s+Revised|Updated|Revised)[:\s]+([0-3]?[0-9][\s/.-][0-3]?[0-9][\s/.-][0-9]{4})', re.IGNORECASE),
+    # ADDED: Month-year pattern to quick patterns
+    re.compile(
+        rf'(?:Last\s+Updated|Last\s+Revised|Updated|Revised|Published)[:\s]+({DATE_MONTH_YEAR_FLEX})', re.IGNORECASE),
     re.compile(rf'\b({DATE_TEXT_ORDINAL})\b', re.IGNORECASE),
     re.compile(rf'\b({DATE_TEXT})\b', re.IGNORECASE),
+    re.compile(rf'\b({DATE_MONTH_YEAR_FLEX})\b', re.IGNORECASE),
 ]
 
 
