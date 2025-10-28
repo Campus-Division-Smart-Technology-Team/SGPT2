@@ -25,9 +25,9 @@ QueryType = Literal['greeting', 'about', 'gratitude', 'farewell', 'search']
 # ============================================================================
 
 # Emojis (properly encoded)
-EMOJI_GORILLA = "ðŸ¦"
-EMOJI_BUILDING = "ðŸ¢"
-EMOJI_FIRE = "ðŸ”¥"
+EMOJI_GORILLA = "🦍"
+EMOJI_BUILDING = "🏢"
+EMOJI_FIRE = "🔥"
 
 # ============================================================================
 # PRE-COMPILED PATTERNS
