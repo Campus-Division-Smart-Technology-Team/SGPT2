@@ -89,7 +89,7 @@ ACTION_PATTERNS = {
 # ============================================================================
 
 GREETING_RESPONSES = [
-    f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\nâ€¢ {EMOJI_BUILDING} Building Management Systems (BMS)\nâ€¢ {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
+    f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\n {EMOJI_BUILDING} Building Management Systems (BMS)\n {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
     "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about BMS and FRAs. How can I assist you?",
     f"Hello! Alfred here {EMOJI_GORILLA}, your University of Bristol assistant. I have access to information about building management systems and Fire Risk Assessments. What can I help you with?"
 ]
