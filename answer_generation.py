@@ -184,17 +184,18 @@ def find_operational_date(
     if not operational_results:
         return None, None
     # Import here to avoid circular dependency
-    from search_operations import matches_building_fuzzy
+    from search_operations import matches_building_fuzzy  # pylint: disable=import-outside-toplevel
 
     # Filter by building if specified
     if target_building:
-        building_specific = [
+        # STRATEGY 1: Try EXACT building name match first (no fuzzy)
+        exact_matches = [
             r for r in operational_results
-            if matches_building_fuzzy(r, target_building)
+            if get_building_name_from_result(r).lower().strip() == target_building.lower().strip()
         ]
 
-        if building_specific:
-            top_operational = building_specific[0]
+        if exact_matches:
+            top_operational = exact_matches[0]
             building_name = get_building_name_from_result(top_operational)
             logging.info(
                 "✅ Using building-specific operational doc: %s (building: %s)",
@@ -202,11 +203,31 @@ def find_operational_date(
                 building_name
             )
         else:
-            logging.warning(
-                "No operational docs match building '%s', using top result",
+            # STRATEGY 2: Fallback to fuzzy matching
+            logging.info(
+                "No exact matches for '%s', trying fuzzy matching...",
                 target_building
             )
-            top_operational = operational_results[0]
+            building_specific = [
+                r for r in operational_results
+                if matches_building_fuzzy(r, target_building)
+            ]
+
+            if building_specific:
+                top_operational = building_specific[0]
+                building_name = get_building_name_from_result(top_operational)
+                logging.warning(
+                    "⚠️  Using FUZZY match operational doc: %s (building: %s) for target '%s'",
+                    top_operational.get('key', ''),
+                    building_name,
+                    target_building
+                )
+            else:
+                logging.warning(
+                    "No operational docs match building '%s' (exact or fuzzy), using top result",
+                    target_building
+                )
+                top_operational = operational_results[0]
     else:
         top_operational = operational_results[0]
 

@@ -7,6 +7,7 @@ Optimised version with pre-compiled patterns and type hints.
 
 import re
 import random
+import logging
 from typing import Optional, Tuple, Dict, Any, Literal, List
 from dataclasses import dataclass, field
 
@@ -24,9 +25,9 @@ QueryType = Literal['greeting', 'about', 'gratitude', 'farewell', 'search']
 # ============================================================================
 
 # Emojis (properly encoded)
-EMOJI_GORILLA = "🦍"
-EMOJI_BUILDING = "🏢"
-EMOJI_FIRE = "🔥"
+EMOJI_GORILLA = "ðŸ¦"
+EMOJI_BUILDING = "ðŸ¢"
+EMOJI_FIRE = "ðŸ”¥"
 
 # ============================================================================
 # PRE-COMPILED PATTERNS
@@ -88,7 +89,7 @@ ACTION_PATTERNS = {
 # ============================================================================
 
 GREETING_RESPONSES = [
-    f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\n• {EMOJI_BUILDING} Building Management Systems (BMS)\n• {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
+    f"Hello! I'm Alfred {EMOJI_GORILLA}, your helpful assistant at the University of Bristol. I can help you find information about:\n\nâ€¢ {EMOJI_BUILDING} Building Management Systems (BMS)\nâ€¢ {EMOJI_FIRE} Fire Risk Assessments (FRAs)\n\nWhat would you like to know today?",
     "Hi there! I'm Alfred, ready to help you search through our knowledge bases. Feel free to ask me about BMS and FRAs. How can I assist you?",
     f"Hello! Alfred here {EMOJI_GORILLA}, your University of Bristol assistant. I have access to information about building management systems and Fire Risk Assessments. What can I help you with?"
 ]
@@ -231,6 +232,19 @@ def should_search_index(query: str) -> Tuple[bool, Optional[str]]:
         - should_search: True if query needs search, False for direct response
         - direct_response: Response string for non-search queries, None for search
     """
+    # Check for counting queries first (before regular classification)
+    try:
+        from counting_queries import is_counting_query, generate_counting_answer  # pylint: disable=import-outside-toplevel
+        if is_counting_query(query):
+            answer = generate_counting_answer(query)
+            if answer:
+                return False, answer
+    except ImportError:
+        logging.warning("counting_queries module not available")
+    except Exception as e:  # pylint: disable=broad-except
+        logging.error("Error checking counting query: %s", e)
+
+    # Regular query classification
     query_type, suggested_response = QueryClassifier.classify_query(query)
 
     if query_type == 'search':
@@ -397,3 +411,4 @@ def get_classifier_stats() -> Dict[str, int]:
             len(ACTION_PATTERNS)
         )
     }
+# ============================================================================
